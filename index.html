@@ -69,6 +69,26 @@
 
           <div class="row">
             <label>
+              Condition (how it was sold)
+              <select name="condition" required>
+                <option value="new_sealed">New (sealed)</option>
+                <option value="new_openbox">New (open box)</option>
+                <option value="used_complete">Used (complete)</option>
+                <option value="used_incomplete">Used (incomplete)</option>
+                <option value="missing_pieces">Missing pieces</option>
+                <option value="custom">Custom / Notes</option>
+              </select>
+              <div class="hint">Use Notes for custom detail (e.g., “minifig missing”).</div>
+            </label>
+
+            <label>
+              Notes
+              <textarea name="notes" rows="3" placeholder="Condition details, missing parts, strategy, etc."></textarea>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
               Purchase Cost ($)
               <input type="number" step="0.01" min="0" name="purchaseCost" required />
             </label>
@@ -132,13 +152,6 @@
             </label>
           </div>
 
-          <div class="row">
-            <label>
-              Notes
-              <textarea name="notes" rows="3" placeholder="Condition, missing pieces, strategy, etc."></textarea>
-            </label>
-          </div>
-
           <input type="hidden" name="id" />
 
           <div class="row buttons">
@@ -180,6 +193,10 @@
             <div class="chartTitle">Profit by Marketplace</div>
             <canvas id="marketBar"></canvas>
           </div>
+          <div class="chartCard">
+            <div class="chartTitle">Profit by Condition</div>
+            <canvas id="conditionBar"></canvas>
+          </div>
         </div>
       </section>
 
@@ -193,6 +210,17 @@
               <option value="all">All</option>
               <option value="sold">Sold</option>
               <option value="unsold">Unsold</option>
+            </select>
+
+            <select id="conditionFilter" title="Filter by condition">
+              <option value="all">All Conditions</option>
+              <option value="new_sealed">New (sealed)</option>
+              <option value="new_openbox">New (open box)</option>
+              <option value="used_complete">Used (complete)</option>
+              <option value="used_incomplete">Used (incomplete)</option>
+              <option value="missing_pieces">Missing pieces</option>
+              <option value="custom">Custom / Notes</option>
+              <option value="unknown">Unknown</option>
             </select>
           </div>
         </div>
@@ -209,6 +237,7 @@
                 <th>Profit</th>
                 <th>ROI</th>
                 <th>Sold On</th>
+                <th>Condition</th>
                 <th></th>
               </tr>
             </thead>
