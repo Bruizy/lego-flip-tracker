@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#111827" />
+  <title>Lego Flip Tracker</title>
+
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- iOS nice-to-have -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+  <!-- Chart.js (cached by Service Worker for offline use after first load) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🧱</div>
+      <div>
+        <div class="title">Lego Flip Tracker</div>
+        <div class="subtitle" id="installHint">Track buys, sells, profit & stats</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn secondary" id="exportBtn" title="Export JSON">Export</button>
+      <label class="btn secondary file">
+        Import
+        <input type="file" id="importInput" accept="application/json" />
+      </label>
+      <button class="btn primary" id="installBtn" hidden>Install</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="grid">
+      <!-- Entry form -->
+      <section class="card">
+        <h2>Add Flip</h2>
+
+        <form id="flipForm">
+          <div class="row">
+            <label>
+              Set / Item Name
+              <input name="name" placeholder="e.g., 75304 Darth Vader Helmet" required />
+            </label>
+            <label>
+              Set Number (optional)
+              <input name="setNumber" placeholder="e.g., 75304" />
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Purchase Date
+              <input type="date" name="purchaseDate" required />
+            </label>
+            <label>
+              Sold Date (optional)
+              <input type="date" name="soldDate" />
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Purchase Cost ($)
+              <input type="number" step="0.01" min="0" name="purchaseCost" required />
+            </label>
+            <label>
+              Material Cost ($)
+              <input type="number" step="0.01" min="0" name="materialCost" value="0" required />
+              <div class="hint">Extra pieces, supplies, shipping materials, etc.</div>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Sold Price ($)
+              <input type="number" step="0.01" min="0" name="soldPrice" value="0" required />
+            </label>
+            <label>
+              Fees / Shipping Out ($)
+              <input type="number" step="0.01" min="0" name="fees" value="0" required />
+              <div class="hint">Marketplace fees, shipping you paid, etc.</div>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Bought From
+              <input name="boughtFrom" placeholder="e.g., Walmart, FB Marketplace" />
+            </label>
+            <label>
+              Sold On
+              <input name="soldOn" placeholder="e.g., eBay, BrickLink, FBMP" />
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Buy Payment Type
+              <select name="buyPayment">
+                <option value="">—</option>
+                <option>Cash</option>
+                <option>Debit</option>
+                <option>Credit</option>
+                <option>PayPal</option>
+                <option>eTransfer</option>
+                <option>Gift Card</option>
+                <option>Other</option>
+              </select>
+            </label>
+
+            <label>
+              Sell Payment Type
+              <select name="sellPayment">
+                <option value="">—</option>
+                <option>Cash</option>
+                <option>Debit</option>
+                <option>Credit</option>
+                <option>PayPal</option>
+                <option>eTransfer</option>
+                <option>Marketplace Payout</option>
+                <option>Other</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Notes
+              <textarea name="notes" rows="3" placeholder="Condition, missing pieces, strategy, etc."></textarea>
+            </label>
+          </div>
+
+          <input type="hidden" name="id" />
+
+          <div class="row buttons">
+            <button class="btn primary" type="submit" id="saveBtn">Save Flip</button>
+            <button class="btn" type="button" id="resetBtn">Clear</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Stats + charts -->
+      <section class="card">
+        <h2>Stats</h2>
+
+        <div class="kpis">
+          <div class="kpi">
+            <div class="kpiLabel">Total Profit</div>
+            <div class="kpiValue" id="kpiProfit">$0.00</div>
+          </div>
+          <div class="kpi">
+            <div class="kpiLabel">Total Revenue</div>
+            <div class="kpiValue" id="kpiRevenue">$0.00</div>
+          </div>
+          <div class="kpi">
+            <div class="kpiLabel">Total Costs</div>
+            <div class="kpiValue" id="kpiCosts">$0.00</div>
+          </div>
+          <div class="kpi">
+            <div class="kpiLabel">ROI</div>
+            <div class="kpiValue" id="kpiROI">0%</div>
+          </div>
+        </div>
+
+        <div class="charts">
+          <div class="chartCard">
+            <div class="chartTitle">Profit Over Time (by sold month)</div>
+            <canvas id="profitLine"></canvas>
+          </div>
+          <div class="chartCard">
+            <div class="chartTitle">Profit by Marketplace</div>
+            <canvas id="marketBar"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- List -->
+      <section class="card full">
+        <div class="listHeader">
+          <h2>Flips</h2>
+          <div class="filters">
+            <input id="searchInput" placeholder="Search name / set # / marketplaces..." />
+            <select id="statusFilter">
+              <option value="all">All</option>
+              <option value="sold">Sold</option>
+              <option value="unsold">Unsold</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="tableWrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Purchase</th>
+                <th>Sold</th>
+                <th>Costs</th>
+                <th>Revenue</th>
+                <th>Profit</th>
+                <th>ROI</th>
+                <th>Sold On</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="flipTbody"></tbody>
+          </table>
+        </div>
+
+        <div class="footerNote">
+          Data is stored on your device (IndexedDB). Export regularly if you want backups.
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" aria-live="polite"></div>
+</body>
+</html>
