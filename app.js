@@ -41,10 +41,7 @@ const CONDITION_LABELS = {
   new_sealed: "New (sealed)",
   new_openbox: "New (open box)",
   used_complete: "Used (complete)",
-  used_incomplete: "Used (incomplete)",
-  missing_pieces: "Missing pieces",
-  custom: "Custom / Notes",
-  unknown: "Unknown"
+  used_incomplete: "Used (incomplete)"
 };
 
 function normalizeCondition(v) {
@@ -59,10 +56,7 @@ function conditionBadge(condKey) {
     new_sealed: "🟩",
     new_openbox: "🟨",
     used_complete: "🟦",
-    used_incomplete: "🟧",
-    missing_pieces: "🟥",
-    custom: "🟪",
-    unknown: "⬜"
+    used_incomplete: "🟧"
   })[condKey] || "⬜";
 
   return `<span class="badge cond">${emoji} ${escapeHtml(label)}</span>`;
