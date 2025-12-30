@@ -27,6 +27,47 @@ function toast(msg) {
   toast._t = setTimeout(() => el.classList.remove("show"), 2200);
 }
 
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+/** ---------- Condition helpers ---------- */
+const CONDITION_LABELS = {
+  new_sealed: "New (sealed)",
+  new_openbox: "New (open box)",
+  used_complete: "Used (complete)",
+  used_incomplete: "Used (incomplete)",
+  missing_pieces: "Missing pieces",
+  custom: "Custom / Notes",
+  unknown: "Unknown"
+};
+
+function normalizeCondition(v) {
+  const key = (v || "").trim();
+  return CONDITION_LABELS[key] ? key : "unknown";
+}
+
+function conditionBadge(condKey) {
+  const label = CONDITION_LABELS[condKey] || "Unknown";
+  // emoji mapping for quick scanning
+  const emoji = ({
+    new_sealed: "🟩",
+    new_openbox: "🟨",
+    used_complete: "🟦",
+    used_incomplete: "🟧",
+    missing_pieces: "🟥",
+    custom: "🟪",
+    unknown: "⬜"
+  })[condKey] || "⬜";
+
+  return `<span class="badge cond">${emoji} ${escapeHtml(label)}</span>`;
+}
+
 /** ---------- IndexedDB ---------- */
 const DB_NAME = "legoFlipDB";
 const DB_VERSION = 1;
@@ -110,6 +151,7 @@ function normalizeFormData(fd) {
     setNumber: (obj.setNumber || "").trim(),
     purchaseDate: obj.purchaseDate || "",
     soldDate: obj.soldDate || "",
+    condition: normalizeCondition(obj.condition),
     purchaseCost: toNum(obj.purchaseCost),
     materialCost: toNum(obj.materialCost),
     soldPrice: toNum(obj.soldPrice),
@@ -127,6 +169,7 @@ function normalizeFormData(fd) {
 let allFlips = [];
 let profitLineChart = null;
 let marketBarChart = null;
+let conditionBarChart = null;
 
 function renderTable(list) {
   const tbody = $("#flipTbody");
@@ -144,11 +187,13 @@ function renderTable(list) {
     const { totalCost, revenue, profit, roi, sold } = calc(item);
 
     const tr = document.createElement("tr");
-
     const itemTitle = `${item.name || "(unnamed)"}${item.setNumber ? ` • #${item.setNumber}` : ""}`;
     const statusBadge = sold
       ? `<span class="badge sold">✅ Sold</span>`
       : `<span class="badge unsold">🕒 Unsold</span>`;
+
+    const condKey = normalizeCondition(item.condition);
+    const cond = conditionBadge(condKey);
 
     tr.innerHTML = `
       <td>
@@ -156,6 +201,7 @@ function renderTable(list) {
           <div style="font-weight:900;">${escapeHtml(itemTitle)}</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
             ${statusBadge}
+            ${cond}
             ${item.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(item.boughtFrom)}</span>` : ""}
             ${item.buyPayment ? `<span class="badge">💳 ${escapeHtml(item.buyPayment)}</span>` : ""}
           </div>
@@ -188,6 +234,8 @@ function renderTable(list) {
           <div class="small">${escapeHtml(item.sellPayment || "")}</div>
         </div>
       </td>
+
+      <td>${cond}</td>
 
       <td>
         <div class="rowActions">
@@ -230,25 +278,34 @@ function renderCharts(list) {
     const { profit } = calc(item);
     profitByMonth.set(key, (profitByMonth.get(key) || 0) + profit);
   }
-
   const months = [...profitByMonth.keys()].sort();
   const profitVals = months.map(m => profitByMonth.get(m) || 0);
 
-  // Profit by marketplace (soldOn)
+  // Profit by marketplace (soldOn) — only sold items
   const profitByMarket = new Map();
   for (const item of list) {
-    const market = (item.soldOn || "").trim() || "Unknown";
     const { profit, sold } = calc(item);
     if (!sold) continue;
+    const market = (item.soldOn || "").trim() || "Unknown";
     profitByMarket.set(market, (profitByMarket.get(market) || 0) + profit);
   }
-
   const markets = [...profitByMarket.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10);
-
   const marketLabels = markets.map(([k]) => k);
   const marketVals = markets.map(([, v]) => v);
+
+  // Profit by condition — only sold items
+  const profitByCond = new Map();
+  for (const item of list) {
+    const { profit, sold } = calc(item);
+    if (!sold) continue;
+    const c = normalizeCondition(item.condition);
+    profitByCond.set(c, (profitByCond.get(c) || 0) + profit);
+  }
+  const condOrder = ["new_sealed","new_openbox","used_complete","used_incomplete","missing_pieces","custom","unknown"];
+  const condLabels = condOrder.map(k => CONDITION_LABELS[k]);
+  const condVals = condOrder.map(k => profitByCond.get(k) || 0);
 
   // Wait until Chart is available
   if (!window.Chart) return;
@@ -279,23 +336,16 @@ function renderCharts(list) {
       responsive: true,
       plugins: {
         legend: { labels: { color: common.color } },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => ` ${money(ctx.parsed.y)}`
-          }
-        }
+        tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
       },
       scales: {
         x: { ticks: { color: common.color }, grid: { color: common.grid } },
-        y: {
-          ticks: { color: common.color, callback: (v) => money(v) },
-          grid: { color: common.grid }
-        }
+        y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
       }
     }
   });
 
-  // Bar chart
+  // Marketplace bar
   const barCtx = $("#marketBar").getContext("2d");
   if (marketBarChart) marketBarChart.destroy();
   marketBarChart = new Chart(barCtx, {
@@ -315,31 +365,54 @@ function renderCharts(list) {
     },
     options: {
       responsive: true,
-      plugins: { legend: { labels: { color: common.color } } },
+      plugins: {
+        legend: { labels: { color: common.color } },
+        tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+      },
       scales: {
         x: { ticks: { color: common.color }, grid: { color: common.grid } },
-        y: {
-          ticks: { color: common.color, callback: (v) => money(v) },
-          grid: { color: common.grid }
-        }
+        y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
       }
     }
   });
-}
 
-function escapeHtml(s) {
-  return String(s ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+  // Condition bar
+  const condCtx = $("#conditionBar").getContext("2d");
+  if (conditionBarChart) conditionBarChart.destroy();
+  conditionBarChart = new Chart(condCtx, {
+    type: "bar",
+    data: {
+      labels: condLabels,
+      datasets: [{
+        label: "Profit",
+        data: condVals,
+        backgroundColor: (ctx) => {
+          const v = ctx.raw ?? 0;
+          return v >= 0 ? "rgba(59,130,246,0.45)" : "rgba(239,68,68,0.55)";
+        },
+        borderColor: "rgba(255,255,255,0.18)",
+        borderWidth: 1
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: common.color } },
+        tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+      },
+      scales: {
+        x: { ticks: { color: common.color }, grid: { color: common.grid } },
+        y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+      }
+    }
+  });
 }
 
 /** ---------- Filters ---------- */
 function getFiltered() {
   const q = ($("#searchInput").value || "").trim().toLowerCase();
   const status = $("#statusFilter").value;
+  const condFilter = $("#conditionFilter")?.value || "all";
 
   return allFlips.filter(item => {
     const { sold } = calc(item);
@@ -347,10 +420,14 @@ function getFiltered() {
     if (status === "sold" && !sold) return false;
     if (status === "unsold" && sold) return false;
 
+    const itemCond = normalizeCondition(item.condition);
+    if (condFilter !== "all" && itemCond !== condFilter) return false;
+
     if (!q) return true;
     const hay = [
       item.name, item.setNumber, item.boughtFrom, item.soldOn,
-      item.buyPayment, item.sellPayment, item.notes
+      item.buyPayment, item.sellPayment, item.notes,
+      CONDITION_LABELS[itemCond]
     ].join(" ").toLowerCase();
 
     return hay.includes(q);
@@ -372,6 +449,7 @@ function setForm(item) {
   f.setNumber.value = item?.setNumber || "";
   f.purchaseDate.value = item?.purchaseDate || "";
   f.soldDate.value = item?.soldDate || "";
+  f.condition.value = normalizeCondition(item?.condition || "new_sealed");
   f.purchaseCost.value = item?.purchaseCost ?? "";
   f.materialCost.value = item?.materialCost ?? 0;
   f.soldPrice.value = item?.soldPrice ?? 0;
@@ -458,7 +536,6 @@ async function importData(file) {
     return;
   }
 
-  // Merge by id; if no id exists, assign one
   for (const raw of flips) {
     const item = {
       id: raw.id || uid(),
@@ -466,6 +543,7 @@ async function importData(file) {
       setNumber: (raw.setNumber || "").trim(),
       purchaseDate: raw.purchaseDate || "",
       soldDate: raw.soldDate || "",
+      condition: normalizeCondition(raw.condition),
       purchaseCost: toNum(raw.purchaseCost),
       materialCost: toNum(raw.materialCost),
       soldPrice: toNum(raw.soldPrice),
@@ -477,7 +555,7 @@ async function importData(file) {
       notes: (raw.notes || "").trim(),
       updatedAt: Date.now()
     };
-    if (!item.name || !item.purchaseDate) continue; // skip broken rows
+    if (!item.name || !item.purchaseDate) continue;
     await txPut(item);
   }
 
@@ -536,6 +614,7 @@ async function init() {
 
   $("#searchInput").addEventListener("input", rerender);
   $("#statusFilter").addEventListener("change", rerender);
+  $("#conditionFilter").addEventListener("change", rerender);
 
   $("#exportBtn").addEventListener("click", exportData);
 
@@ -550,6 +629,23 @@ async function init() {
   await registerSW();
 
   allFlips = await txReadAll();
+
+  // If old data exists without condition, default it safely (no user work)
+  let migrated = false;
+  for (const item of allFlips) {
+    if (!item.condition) {
+      item.condition = "unknown";
+      item.updatedAt = Date.now();
+      await txPut(item);
+      migrated = true;
+    } else {
+      item.condition = normalizeCondition(item.condition);
+    }
+  }
+  if (migrated) {
+    allFlips = await txReadAll();
+  }
+
   rerender();
 
   // Charts might load slightly after; re-render once Chart.js is ready
@@ -565,3 +661,4 @@ async function init() {
 }
 
 init();
+  
