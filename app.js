@@ -297,7 +297,7 @@ function renderCharts(list) {
     const c = normalizeCondition(item.condition);
     profitByCond.set(c, (profitByCond.get(c) || 0) + profit);
   }
-  const condOrder = ["new_sealed","new_openbox","used_complete","used_incomplete","missing_pieces","custom","unknown"];
+  const condOrder = ["new_sealed","new_openbox","used_complete","used_incomplete"];
   const condLabels = condOrder.map(k => CONDITION_LABELS[k]);
   const condVals = condOrder.map(k => profitByCond.get(k) || 0);
 
