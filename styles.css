@@ -252,12 +252,13 @@ input:focus, select:focus, textarea:focus {
   align-items:center;
 }
 .thumb{
-  width:64px;
-  height:64px;
-  object-fit:cover;
+  width:80px;
+  height:80px;
+  object-fit:contain; /* show FULL image */
   border-radius:12px;
   border:1px solid var(--border);
-  background: rgba(255,255,255,0.04);
+  background: rgba(255,255,255,0.06);
+  padding:6px;
 }
 .badge.batch {
   border-color: rgba(168, 85, 247, 0.28);
