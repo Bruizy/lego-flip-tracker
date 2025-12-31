@@ -36,7 +36,7 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-/** ---------- Rebrickable (easiest) ---------- */
+/** ---------- Rebrickable ---------- */
 const RB_KEY_STORAGE = "rebrickable_api_key";
 
 function getRBKey() {
@@ -47,7 +47,6 @@ function setRBKey(key) {
   if (!k) localStorage.removeItem(RB_KEY_STORAGE);
   else localStorage.setItem(RB_KEY_STORAGE, k);
 }
-
 async function ensureRBKey() {
   let key = getRBKey();
   if (key) return key;
@@ -57,16 +56,12 @@ async function ensureRBKey() {
   setRBKey(entered);
   return getRBKey();
 }
-
 function normalizeSetNumberForRB(raw) {
   const s = (raw || "").trim();
   if (!s) return "";
-  // If user typed 75304 -> use 75304-1
   if (/^\d+$/.test(s)) return `${s}-1`;
-  // If already like 75304-1 keep it
   return s;
 }
-
 async function rebrickableLookup(setNumberRaw) {
   const key = await ensureRBKey();
   if (!key) {
@@ -93,7 +88,6 @@ async function rebrickableLookup(setNumberRaw) {
       return null;
     }
     const data = await res.json();
-    // data.name, data.set_img_url
     return {
       name: data?.name || "",
       img: data?.set_img_url || ""
@@ -143,8 +137,9 @@ function batchBadge(batch) {
 
 /** ---------- IndexedDB ---------- */
 const DB_NAME = "legoFlipDB";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // bumped for expenses store
 const STORE = "flips";
+const EXPENSES_STORE = "expenses";
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -152,12 +147,32 @@ function openDB() {
 
     req.onupgradeneeded = () => {
       const db = req.result;
-      const store = db.createObjectStore(STORE, { keyPath: "id" });
-      store.createIndex("purchaseDate", "purchaseDate");
-      store.createIndex("soldDate", "soldDate");
-      store.createIndex("name", "name");
-      store.createIndex("batch", "batch");
-      store.createIndex("setNumber", "setNumber");
+
+      // Flips store
+      if (!db.objectStoreNames.contains(STORE)) {
+        const store = db.createObjectStore(STORE, { keyPath: "id" });
+        store.createIndex("purchaseDate", "purchaseDate");
+        store.createIndex("soldDate", "soldDate");
+        store.createIndex("name", "name");
+        store.createIndex("batch", "batch");
+        store.createIndex("setNumber", "setNumber");
+      } else {
+        // ensure indexes exist (safe no-op if already there)
+        const tx = req.transaction;
+        const store = tx.objectStore(STORE);
+        if (!store.indexNames.contains("purchaseDate")) store.createIndex("purchaseDate", "purchaseDate");
+        if (!store.indexNames.contains("soldDate")) store.createIndex("soldDate", "soldDate");
+        if (!store.indexNames.contains("name")) store.createIndex("name", "name");
+        if (!store.indexNames.contains("batch")) store.createIndex("batch", "batch");
+        if (!store.indexNames.contains("setNumber")) store.createIndex("setNumber", "setNumber");
+      }
+
+      // Expenses store
+      if (!db.objectStoreNames.contains(EXPENSES_STORE)) {
+        const es = db.createObjectStore(EXPENSES_STORE, { keyPath: "id" });
+        es.createIndex("date", "date");
+        es.createIndex("category", "category");
+      }
     };
 
     req.onsuccess = () => resolve(req.result);
@@ -195,6 +210,55 @@ async function txDelete(id) {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
     const req = store.delete(id);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => db.close();
+  });
+}
+
+/** ---------- Expenses DB helpers ---------- */
+async function txReadAllExpenses() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(EXPENSES_STORE, "readonly");
+    const store = tx.objectStore(EXPENSES_STORE);
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => db.close();
+  });
+}
+
+async function txPutExpense(item) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(EXPENSES_STORE, "readwrite");
+    const store = tx.objectStore(EXPENSES_STORE);
+    const req = store.put(item);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => db.close();
+  });
+}
+
+async function txDeleteExpense(id) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(EXPENSES_STORE, "readwrite");
+    const store = tx.objectStore(EXPENSES_STORE);
+    const req = store.delete(id);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => db.close();
+  });
+}
+
+async function txClearExpenses() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(EXPENSES_STORE, "readwrite");
+    const store = tx.objectStore(EXPENSES_STORE);
+    const req = store.clear();
     req.onsuccess = () => resolve(true);
     req.onerror = () => reject(req.error);
     tx.oncomplete = () => db.close();
@@ -245,6 +309,8 @@ function normalizeFormData(fd) {
 
 /** ---------- Rendering ---------- */
 let allFlips = [];
+let allExpenses = [];
+
 let profitLineChart = null;
 let marketBarChart = null;
 let conditionBarChart = null;
@@ -346,6 +412,30 @@ function renderTable(list) {
   }
 }
 
+function renderExpensesTable(expenses) {
+  const tb = $("#expenseTbody");
+  if (!tb) return;
+  tb.innerHTML = "";
+
+  const sorted = [...expenses].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  for (const e of sorted) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="mono">${escapeHtml(e.date || "—")}</td>
+      <td>${escapeHtml(e.category || "")}</td>
+      <td>${escapeHtml(e.note || "")}</td>
+      <td class="mono">${money(toNum(e.amount))}</td>
+      <td>
+        <div class="rowActions">
+          <button class="iconBtn" data-exp-del="${e.id}" title="Delete">🗑️</button>
+        </div>
+      </td>
+    `;
+    tb.appendChild(tr);
+  }
+}
+
 function renderKPIs(list) {
   let totalProfit = 0;
   let totalRevenue = 0;
@@ -360,10 +450,16 @@ function renderKPIs(list) {
 
   const roi = totalCosts > 0 ? (totalProfit / totalCosts) * 100 : 0;
 
+  const expensesTotal = allExpenses.reduce((s, e) => s + toNum(e.amount), 0);
+  const netProfit = totalProfit - expensesTotal;
+
   $("#kpiProfit") && ($("#kpiProfit").textContent = money(totalProfit));
   $("#kpiRevenue") && ($("#kpiRevenue").textContent = money(totalRevenue));
   $("#kpiCosts") && ($("#kpiCosts").textContent = money(totalCosts));
   $("#kpiROI") && ($("#kpiROI").textContent = pct(roi));
+
+  $("#kpiExpenses") && ($("#kpiExpenses").textContent = money(expensesTotal));
+  $("#kpiNetProfit") && ($("#kpiNetProfit").textContent = money(netProfit));
 }
 
 function updateBatchUIFromAllFlips(flips) {
@@ -689,15 +785,79 @@ async function handleTableClick(ev) {
   }
 }
 
+/** ---------- Expenses actions ---------- */
+async function addExpenseFromForm(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const obj = Object.fromEntries(fd.entries());
+
+  const exp = {
+    id: uid(),
+    amount: toNum(obj.amount),
+    category: (obj.category || "").trim(),
+    date: obj.date || "",
+    note: (obj.note || "").trim(),
+    createdAt: Date.now()
+  };
+
+  if (!exp.amount || exp.amount <= 0) return toast("Expense amount required.");
+  if (!exp.date) return toast("Expense date required.");
+  if (!exp.category) return toast("Category required.");
+
+  await txPutExpense(exp);
+  allExpenses = await txReadAllExpenses();
+  renderExpensesTable(allExpenses);
+  rerender();
+  ev.target.reset();
+
+  // set default date again (quality of life)
+  const d = $("#expenseForm")?.querySelector('input[name="date"]');
+  if (d) {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    d.value = `${yyyy}-${mm}-${dd}`;
+  }
+
+  toast("Expense added ✅");
+}
+
+async function handleExpensesTableClick(ev) {
+  const id = ev.target?.getAttribute?.("data-exp-del");
+  if (!id) return;
+  await txDeleteExpense(id);
+  allExpenses = await txReadAllExpenses();
+  renderExpensesTable(allExpenses);
+  rerender();
+  toast("Expense deleted 🗑️");
+}
+
+async function clearExpenses() {
+  const ok = confirm("Clear all expenses? This cannot be undone.");
+  if (!ok) return;
+  await txClearExpenses();
+  allExpenses = await txReadAllExpenses();
+  renderExpensesTable(allExpenses);
+  rerender();
+  toast("Expenses cleared 🗑️");
+}
+
 /** ---------- Export / Import ---------- */
 async function exportData() {
-  const data = await txReadAll();
-  const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), flips: data }, null, 2)], {
-    type: "application/json"
-  });
+  const flips = await txReadAll();
+  const expenses = await txReadAllExpenses();
+
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    flips,
+    expenses
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `lego-flips-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.download = `lego-flips-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
   toast("Exported 📦");
@@ -706,10 +866,18 @@ async function exportData() {
 async function importData(file) {
   const text = await file.text();
   let parsed;
-  try { parsed = JSON.parse(text); } catch { toast("Invalid JSON file."); return; }
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    toast("Invalid JSON file.");
+    return;
+  }
 
   const flips = Array.isArray(parsed) ? parsed : parsed.flips;
-  if (!Array.isArray(flips)) { toast("No flips found in file."); return; }
+  if (!Array.isArray(flips)) {
+    toast("No flips found in file.");
+    return;
+  }
 
   for (const raw of flips) {
     const item = {
@@ -733,14 +901,35 @@ async function importData(file) {
       updatedAt: Date.now(),
       boxIncluded: (raw.boxIncluded || "yes"),
       manualIncluded: (raw.manualIncluded || "yes")
-
     };
     if (!item.name || !item.purchaseDate) continue;
     await txPut(item);
   }
 
+  // Expenses import is optional / backward compatible
+  const expenses = parsed?.expenses;
+  if (Array.isArray(expenses)) {
+    for (const raw of expenses) {
+      const exp = {
+        id: raw.id || uid(),
+        amount: toNum(raw.amount),
+        category: (raw.category || "").trim() || "Other",
+        date: raw.date || "",
+        note: (raw.note || "").trim(),
+        createdAt: Date.now()
+      };
+      if (!exp.amount || exp.amount <= 0) continue;
+      if (!exp.date) continue;
+      await txPutExpense(exp);
+    }
+  }
+
   allFlips = await txReadAll();
   updateBatchUIFromAllFlips(allFlips);
+
+  allExpenses = await txReadAllExpenses();
+  renderExpensesTable(allExpenses);
+
   rerender();
   toast("Imported ✅");
 }
@@ -772,8 +961,11 @@ function setupInstallFlow() {
 /** ---------- Service worker ---------- */
 async function registerSW() {
   if (!("serviceWorker" in navigator)) return;
-  try { await navigator.serviceWorker.register("./sw.js"); }
-  catch (e) { console.warn("SW registration failed:", e); }
+  try {
+    await navigator.serviceWorker.register("./sw.js");
+  } catch (e) {
+    console.warn("SW registration failed:", e);
+  }
 }
 
 /** ---------- Init ---------- */
@@ -781,18 +973,21 @@ async function init() {
   const form = $("#flipForm");
   if (!form) return;
 
-  // default purchase date
+  // default dates
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, "0");
   const dd = String(today.getDate()).padStart(2, "0");
   form.purchaseDate.value = `${yyyy}-${mm}-${dd}`;
 
+  const expDate = $("#expenseForm")?.querySelector('input[name="date"]');
+  if (expDate) expDate.value = `${yyyy}-${mm}-${dd}`;
+
   // Buttons
   $("#apiKeyBtn")?.addEventListener("click", async () => {
     const current = getRBKey();
     const entered = prompt("Rebrickable API key (stored locally in your browser):", current);
-    if (entered === null) return; // canceled
+    if (entered === null) return;
     setRBKey(entered);
     toast(getRBKey() ? "API key saved ✅" : "API key cleared");
   });
@@ -802,7 +997,6 @@ async function init() {
     const res = await rebrickableLookup(setNum);
     if (!res) return;
 
-    // fill name + photo
     if (res.name) form.name.value = res.name;
     if (res.img) {
       form.setImageUrl.value = res.img;
@@ -811,6 +1005,7 @@ async function init() {
     toast("Set info filled ✅");
   });
 
+  // Flip actions
   form.addEventListener("submit", saveForm);
   $("#resetBtn")?.addEventListener("click", resetForm);
   $("#flipTbody")?.addEventListener("click", handleTableClick);
@@ -828,9 +1023,15 @@ async function init() {
     e.target.value = "";
   });
 
+  // Expenses actions
+  $("#expenseForm")?.addEventListener("submit", addExpenseFromForm);
+  $("#expenseTbody")?.addEventListener("click", handleExpensesTableClick);
+  $("#clearExpensesBtn")?.addEventListener("click", clearExpenses);
+
   setupInstallFlow();
   await registerSW();
 
+  // Load flips
   allFlips = await txReadAll();
 
   // Normalize old records
@@ -840,12 +1041,17 @@ async function init() {
     if (item.condition !== c) { item.condition = c; changed = true; }
     if (typeof item.batch !== "string") { item.batch = ""; changed = true; }
     if (typeof item.setImageUrl !== "string") { item.setImageUrl = ""; changed = true; }
+    if (item.boxIncluded !== "yes" && item.boxIncluded !== "no") { item.boxIncluded = "yes"; changed = true; }
+    if (item.manualIncluded !== "yes" && item.manualIncluded !== "no") { item.manualIncluded = "yes"; changed = true; }
     if (changed) { item.updatedAt = Date.now(); await txPut(item); }
     changed = false;
   }
   allFlips = await txReadAll();
-
   updateBatchUIFromAllFlips(allFlips);
+
+  // Load expenses
+  allExpenses = await txReadAllExpenses();
+  renderExpensesTable(allExpenses);
 
   // Hide preview initially
   setPreview("");
@@ -865,5 +1071,3 @@ async function init() {
 }
 
 init();
-
-  
