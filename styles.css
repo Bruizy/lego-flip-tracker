@@ -233,3 +233,9 @@ input:focus, select:focus, textarea:focus {
   max-width: min(560px, calc(100% - 20px));
 }
 .toast.show { opacity: 1; }
+
+.badge.batch {
+  border-color: rgba(168, 85, 247, 0.28);
+  background: rgba(168, 85, 247, 0.10);
+}
+
