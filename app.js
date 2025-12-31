@@ -7,7 +7,6 @@ const money = (n) => {
   const v = Number.isFinite(n) ? n : 0;
   return v.toLocaleString(undefined, { style: "currency", currency: "USD" });
 };
-const pct = (n) => `${(Number.isFinite(n) ? n : 0).toFixed(1)}%`;
 const toNum = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -135,9 +134,25 @@ function batchBadge(batch) {
   return `<span class="badge batch">📦 ${escapeHtml(b)}</span>`;
 }
 
+/** ---------- Expenses: Category -> Cost Bucket ---------- */
+/**
+ * You wanted: expenses affect TOTAL profit + graphs, but by bucket:
+ * - Material bucket: Supplies, Parts
+ * - Shipping bucket: Shipping
+ * - Other bucket: Gas, Fees (other), Other
+ */
+const EXPENSE_CATEGORY_MAP = {
+  Supplies: "material",
+  Parts: "material",
+  Shipping: "shipping",
+  Gas: "other",
+  "Fees (other)": "other",
+  Other: "other"
+};
+
 /** ---------- IndexedDB ---------- */
 const DB_NAME = "legoFlipDB";
-const DB_VERSION = 2; // bumped for expenses store
+const DB_VERSION = 2; // expenses store
 const STORE = "flips";
 const EXPENSES_STORE = "expenses";
 
@@ -157,7 +172,6 @@ function openDB() {
         store.createIndex("batch", "batch");
         store.createIndex("setNumber", "setNumber");
       } else {
-        // ensure indexes exist (safe no-op if already there)
         const tx = req.transaction;
         const store = tx.objectStore(STORE);
         if (!store.indexNames.contains("purchaseDate")) store.createIndex("purchaseDate", "purchaseDate");
@@ -266,19 +280,98 @@ async function txClearExpenses() {
 }
 
 /** ---------- Domain logic ---------- */
-function calc(item) {
-  const purchaseCost = toNum(item.purchaseCost);
-  const materialCost = toNum(item.materialCost);
-  const fees = toNum(item.fees);
+function isSold(item) {
   const soldPrice = toNum(item.soldPrice);
+  return !!item.soldDate && soldPrice > 0;
+}
 
-  const totalCost = purchaseCost + materialCost + fees;
-  const revenue = soldPrice;
-  const profit = revenue - totalCost;
-  const roi = totalCost > 0 ? (profit / totalCost) * 100 : 0;
+/**
+ * Direct per-flip numbers (does NOT include global expenses)
+ */
+function calcFlip(item) {
+  const purchase = toNum(item.purchaseCost);
+  const material = toNum(item.materialCost);
+  const shipping = toNum(item.fees);
+  const revenue = toNum(item.soldPrice);
+  const directCost = purchase + material + shipping;
+  const profit = revenue - directCost;
+  return { revenue, purchase, material, shipping, directCost, profit, sold: isSold(item) };
+}
 
-  const sold = !!item.soldDate && revenue > 0;
-  return { totalCost, revenue, profit, roi, sold };
+/**
+ * Build monthly expense buckets
+ */
+function expenseBucketsByMonth(expenses) {
+  const byMonth = new Map(); // ym -> { material, shipping, other, total }
+  for (const e of expenses) {
+    const key = ym(e.date);
+    if (!key) continue;
+    const amt = toNum(e.amount);
+    if (amt <= 0) continue;
+    const bucket = EXPENSE_CATEGORY_MAP[(e.category || "").trim()] || "other";
+
+    if (!byMonth.has(key)) byMonth.set(key, { material: 0, shipping: 0, other: 0, total: 0 });
+    const obj = byMonth.get(key);
+    obj[bucket] += amt;
+    obj.total += amt;
+  }
+  return byMonth;
+}
+
+/**
+ * Allocate monthly expenses to sold flips in that same sold-month, proportionally by revenue.
+ * This makes profit charts + marketplace/condition/batch totals consistent.
+ */
+function buildExpenseAllocator(flips, expenses) {
+  const expByMonth = expenseBucketsByMonth(expenses);
+
+  // Precompute sold revenue totals by month
+  const soldRevByMonth = new Map(); // ym -> total revenue
+  const soldCountByMonth = new Map(); // ym -> count sold
+  for (const f of flips) {
+    if (!isSold(f)) continue;
+    const key = ym(f.soldDate);
+    if (!key) continue;
+    const rev = toNum(f.soldPrice);
+    soldRevByMonth.set(key, (soldRevByMonth.get(key) || 0) + rev);
+    soldCountByMonth.set(key, (soldCountByMonth.get(key) || 0) + 1);
+  }
+
+  function allocatedExpenseForFlip(flip) {
+    if (!isSold(flip)) return { material: 0, shipping: 0, other: 0, total: 0 };
+
+    const key = ym(flip.soldDate);
+    if (!key) return { material: 0, shipping: 0, other: 0, total: 0 };
+
+    const monthExp = expByMonth.get(key);
+    if (!monthExp) return { material: 0, shipping: 0, other: 0, total: 0 };
+
+    const totalRev = soldRevByMonth.get(key) || 0;
+    const count = soldCountByMonth.get(key) || 0;
+    const rev = toNum(flip.soldPrice);
+
+    // If revenue sum is 0 (rare), split evenly among sold flips that month.
+    const share = totalRev > 0 ? (rev / totalRev) : (count > 0 ? 1 / count : 0);
+
+    return {
+      material: monthExp.material * share,
+      shipping: monthExp.shipping * share,
+      other: monthExp.other * share,
+      total: monthExp.total * share
+    };
+  }
+
+  return { expByMonth, allocatedExpenseForFlip };
+}
+
+/**
+ * Full profit for flip including allocated expenses
+ */
+function calcNet(flip, allocator) {
+  const base = calcFlip(flip);
+  const alloc = allocator.allocatedExpenseForFlip(flip);
+  const profit = base.profit - alloc.total;
+  return { ...base, alloc, profitNet: profit };
 }
 
 function normalizeFormData(fd) {
@@ -327,7 +420,7 @@ function renderItemThumb(url) {
   `;
 }
 
-function renderTable(list) {
+function renderTable(list, allocator) {
   const tbody = $("#flipTbody");
   if (!tbody) return;
   tbody.innerHTML = "";
@@ -340,17 +433,20 @@ function renderTable(list) {
   });
 
   for (const item of sorted) {
-    const { totalCost, revenue, profit, roi, sold } = calc(item);
+    const base = calcFlip(item);
+    const net = calcNet(item, allocator);
 
     const tr = document.createElement("tr");
     const itemTitle = `${item.name || "(unnamed)"}${item.setNumber ? ` • #${item.setNumber}` : ""}`;
-    const statusBadge = sold
+    const statusBadge = base.sold
       ? `<span class="badge sold">✅ Sold</span>`
       : `<span class="badge unsold">🕒 Unsold</span>`;
 
     const cond = conditionBadge(item.condition);
     const batch = batchBadge(item.batch);
 
+    // Table keeps "Costs" column as DIRECT cost (purchase+perflip material+perflip shipping)
+    // Profit column shows PROFIT AFTER ALLOCATED EXPENSES (what you asked)
     tr.innerHTML = `
       <td>
         <div style="display:flex;gap:10px;align-items:flex-start;">
@@ -381,14 +477,14 @@ function renderTable(list) {
         <div class="small">Price: ${money(toNum(item.soldPrice))}</div>
       </td>
 
-      <td class="mono">${money(totalCost)}</td>
-      <td class="mono">${money(revenue)}</td>
+      <td class="mono">${money(base.directCost)}</td>
+      <td class="mono">${money(base.revenue)}</td>
 
-      <td class="mono" style="font-weight:900;color:${profit >= 0 ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)"};">
-        ${money(profit)}
+      <td class="mono" style="font-weight:900;color:${net.profitNet >= 0 ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)"};">
+        ${money(net.profitNet)}
       </td>
 
-      <td class="mono">${pct(roi)}</td>
+      <td class="mono">${base.directCost > 0 ? `${((net.profitNet / base.directCost) * 100).toFixed(1)}%` : "0.0%"}</td>
 
       <td>
         <div style="display:flex;flex-direction:column;gap:4px;">
@@ -436,30 +532,81 @@ function renderExpensesTable(expenses) {
   }
 }
 
-function renderKPIs(list) {
-  let totalProfit = 0;
-  let totalRevenue = 0;
-  let totalCosts = 0;
+/**
+ * Expense card: show totals by CATEGORY only (no net profit, no total)
+ * If you added <div id="expenseSummary"></div> in index.html, it will render.
+ */
+function renderExpenseSummary(expenses) {
+  const el = $("#expenseSummary");
+  if (!el) return;
 
-  for (const item of list) {
-    const { totalCost, revenue, profit } = calc(item);
-    totalProfit += profit;
-    totalRevenue += revenue;
-    totalCosts += totalCost;
+  const sums = {};
+  for (const e of expenses) {
+    const cat = (e.category || "Other").trim() || "Other";
+    sums[cat] = (sums[cat] || 0) + toNum(e.amount);
   }
 
-  const roi = totalCosts > 0 ? (totalProfit / totalCosts) * 100 : 0;
+  const entries = Object.entries(sums).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) {
+    el.innerHTML = `<div class="small">No expenses yet.</div>`;
+    return;
+  }
 
-  const expensesTotal = allExpenses.reduce((s, e) => s + toNum(e.amount), 0);
-  const netProfit = totalProfit - expensesTotal;
+  el.innerHTML = entries
+    .map(([cat, amt]) => `<div style="display:flex;justify-content:space-between;gap:12px;"><div><strong>${escapeHtml(cat)}</strong></div><div class="mono">${money(amt)}</div></div>`)
+    .join("");
+}
 
-  $("#kpiProfit") && ($("#kpiProfit").textContent = money(totalProfit));
-  $("#kpiRevenue") && ($("#kpiRevenue").textContent = money(totalRevenue));
-  $("#kpiCosts") && ($("#kpiCosts").textContent = money(totalCosts));
-  $("#kpiROI") && ($("#kpiROI").textContent = pct(roi));
+/**
+ * KPIs:
+ * Revenue, Purchase Cost, Material Cost, Shipping Cost, Other Cost, Profit
+ * Profit = revenue - (purchase + material + shipping + other)
+ * Expenses are bucketed into material/shipping/other.
+ *
+ * IMPORTANT:
+ * These IDs must exist in index.html:
+ * - kpiRevenue, kpiPurchase, kpiMaterial, kpiShipping, kpiOther, kpiProfit
+ *
+ * If you haven't updated index.html yet, this won't show correctly.
+ */
+function renderKPIs(flipsList, allocator) {
+  let revenue = 0;
+  let purchaseCost = 0;
+  let materialCost = 0;
+  let shippingCost = 0;
+  let otherCost = 0;
 
-  $("#kpiExpenses") && ($("#kpiExpenses").textContent = money(expensesTotal));
-  $("#kpiNetProfit") && ($("#kpiNetProfit").textContent = money(netProfit));
+  // Per-flip direct amounts
+  for (const item of flipsList) {
+    const base = calcFlip(item);
+    revenue += base.revenue;
+    purchaseCost += base.purchase;
+    materialCost += base.material;
+    shippingCost += base.shipping;
+
+    // allocated expenses per sold flip -> bucketed
+    const alloc = allocator.allocatedExpenseForFlip(item);
+    materialCost += alloc.material;
+    shippingCost += alloc.shipping;
+    otherCost += alloc.other;
+  }
+
+  const profit = revenue - purchaseCost - materialCost - shippingCost - otherCost;
+
+  // New KPIs
+  $("#kpiRevenue") && ($("#kpiRevenue").textContent = money(revenue));
+  $("#kpiPurchase") && ($("#kpiPurchase").textContent = money(purchaseCost));
+  $("#kpiMaterial") && ($("#kpiMaterial").textContent = money(materialCost));
+  $("#kpiShipping") && ($("#kpiShipping").textContent = money(shippingCost));
+  $("#kpiOther") && ($("#kpiOther").textContent = money(otherCost));
+  $("#kpiProfit") && ($("#kpiProfit").textContent = money(profit));
+
+  // Backward-compat: if old elements exist, try not to lie.
+  // We blank ROI/costs if present to avoid confusion.
+  $("#kpiCosts") && ($("#kpiCosts").textContent = "—");
+  $("#kpiROI") && ($("#kpiROI").textContent = "—");
+  $("#kpiExpenses") && ($("#kpiExpenses").textContent = "—");
+  $("#kpiNetProfit") && ($("#kpiNetProfit").textContent = "—");
 }
 
 function updateBatchUIFromAllFlips(flips) {
@@ -480,51 +627,51 @@ function updateBatchUIFromAllFlips(flips) {
   }
 }
 
-function renderCharts(list) {
+function renderCharts(flipsList, allocator) {
   if (!window.Chart) return;
 
-  // Profit over time
+  // ---- Profit over time (profit AFTER expenses, month-by-month) ----
   const profitByMonth = new Map();
-  for (const item of list) {
+  for (const item of flipsList) {
     const key = ym(item.soldDate);
     if (!key) continue;
-    const { profit } = calc(item);
-    profitByMonth.set(key, (profitByMonth.get(key) || 0) + profit);
+    const { profitNet } = calcNet(item, allocator);
+    profitByMonth.set(key, (profitByMonth.get(key) || 0) + profitNet);
   }
   const months = [...profitByMonth.keys()].sort();
   const profitVals = months.map(m => profitByMonth.get(m) || 0);
 
-  // Profit by marketplace (sold only)
+  // ---- Profit by marketplace (sold only) AFTER expenses allocation ----
   const profitByMarket = new Map();
-  for (const item of list) {
-    const { profit, sold } = calc(item);
-    if (!sold) continue;
+  for (const item of flipsList) {
+    if (!isSold(item)) continue;
     const market = (item.soldOn || "").trim() || "Unknown";
-    profitByMarket.set(market, (profitByMarket.get(market) || 0) + profit);
+    const { profitNet } = calcNet(item, allocator);
+    profitByMarket.set(market, (profitByMarket.get(market) || 0) + profitNet);
   }
   const markets = [...profitByMarket.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   const marketLabels = markets.map(([k]) => k);
   const marketVals = markets.map(([, v]) => v);
 
-  // Profit by condition (sold only)
+  // ---- Profit by condition (sold only) AFTER expenses allocation ----
   const profitByCond = new Map();
-  for (const item of list) {
-    const { profit, sold } = calc(item);
-    if (!sold) continue;
+  for (const item of flipsList) {
+    if (!isSold(item)) continue;
     const c = normalizeCondition(item.condition);
-    profitByCond.set(c, (profitByCond.get(c) || 0) + profit);
+    const { profitNet } = calcNet(item, allocator);
+    profitByCond.set(c, (profitByCond.get(c) || 0) + profitNet);
   }
   const condOrder = ["new_sealed", "new_openbox", "used_complete", "used_incomplete"];
   const condLabels = condOrder.map(k => CONDITION_LABELS[k]);
   const condVals = condOrder.map(k => profitByCond.get(k) || 0);
 
-  // Profit by batch (sold only)
+  // ---- Profit by batch (sold only) AFTER expenses allocation ----
   const profitByBatch = new Map();
-  for (const item of list) {
-    const { profit, sold } = calc(item);
-    if (!sold) continue;
+  for (const item of flipsList) {
+    if (!isSold(item)) continue;
     const b = normalizeBatch(item.batch) || "No Batch";
-    profitByBatch.set(b, (profitByBatch.get(b) || 0) + profit);
+    const { profitNet } = calcNet(item, allocator);
+    profitByBatch.set(b, (profitByBatch.get(b) || 0) + profitNet);
   }
   const batchesTop = [...profitByBatch.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   const batchLabels = batchesTop.map(([k]) => k);
@@ -667,7 +814,7 @@ function getFiltered() {
   const batchFilter = $("#batchFilter")?.value || "all";
 
   return allFlips.filter(item => {
-    const { sold } = calc(item);
+    const sold = isSold(item);
 
     if (status === "sold" && !sold) return false;
     if (status === "unsold" && sold) return false;
@@ -691,10 +838,14 @@ function getFiltered() {
 }
 
 function rerender() {
-  const list = getFiltered();
-  renderTable(list);
-  renderKPIs(list);
-  renderCharts(list);
+  const flipsView = getFiltered();
+  const allocator = buildExpenseAllocator(allFlips, allExpenses);
+
+  renderTable(flipsView, allocator);
+  renderKPIs(flipsView, allocator);
+  renderCharts(flipsView, allocator);
+
+  renderExpenseSummary(allExpenses);
 }
 
 /** ---------- Form actions ---------- */
@@ -906,7 +1057,7 @@ async function importData(file) {
     await txPut(item);
   }
 
-  // Expenses import is optional / backward compatible
+  // Expenses import (optional/backward compatible)
   const expenses = parsed?.expenses;
   if (Array.isArray(expenses)) {
     for (const raw of expenses) {
@@ -1064,10 +1215,12 @@ async function init() {
     tries++;
     if (window.Chart) {
       clearInterval(t);
-      renderCharts(getFiltered());
+      // rerender already draws charts; this makes sure Chart.js is ready
+      rerender();
     }
     if (tries > 40) clearInterval(t);
   }, 100);
 }
 
 init();
+
