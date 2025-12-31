@@ -27,6 +27,7 @@
     </div>
 
     <div class="actions">
+      <button class="btn secondary" id="apiKeyBtn" title="Set Rebrickable API Key">API Key</button>
       <button class="btn secondary" id="exportBtn" title="Export JSON">Export</button>
       <label class="btn secondary file">
         Import
@@ -46,11 +47,18 @@
           <div class="row">
             <label>
               Set / Item Name
-              <input name="name" placeholder="e.g., 75304 Darth Vader Helmet" required />
+              <input name="name" placeholder="Auto-fills from set # (or type manually)" required />
             </label>
+
             <label>
               Set Number (optional)
-              <input name="setNumber" placeholder="e.g., 75304" />
+              <div class="inputGroup">
+                <input name="setNumber" placeholder="e.g., 75304 or 75304-1" />
+                <button class="btn mini" type="button" id="lookupBtn" title="Lookup name + photo">Lookup</button>
+              </div>
+              <div class="hint">
+                Uses Rebrickable (needs free API key). Tip: type “75304” and hit Lookup.
+              </div>
             </label>
           </div>
 
@@ -91,8 +99,24 @@
             </label>
 
             <label>
+              Set Photo (auto from lookup)
+              <div class="photoRow">
+                <img id="setPhotoPreview" class="thumb" alt="Set preview" />
+                <div class="small">
+                  Saved as a URL (doesn’t upload your personal data).
+                </div>
+              </div>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
               Bought From
               <input name="boughtFrom" placeholder="e.g., Walmart, FB Marketplace" />
+            </label>
+            <label>
+              Sold On
+              <input name="soldOn" placeholder="e.g., eBay, BrickLink, FBMP" />
             </label>
           </div>
 
@@ -122,11 +146,6 @@
 
           <div class="row">
             <label>
-              Sold On
-              <input name="soldOn" placeholder="e.g., eBay, BrickLink, FBMP" />
-            </label>
-
-            <label>
               Buy Payment Type
               <select name="buyPayment">
                 <option value="">—</option>
@@ -139,9 +158,7 @@
                 <option>Other</option>
               </select>
             </label>
-          </div>
 
-          <div class="row">
             <label>
               Sell Payment Type
               <select name="sellPayment">
@@ -155,11 +172,10 @@
                 <option>Other</option>
               </select>
             </label>
-
-            <label></label>
           </div>
 
           <input type="hidden" name="id" />
+          <input type="hidden" name="setImageUrl" />
 
           <div class="row buttons">
             <button class="btn primary" type="submit" id="saveBtn">Save Flip</button>
