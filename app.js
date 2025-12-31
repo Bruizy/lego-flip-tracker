@@ -36,6 +36,75 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
+/** ---------- Rebrickable (easiest) ---------- */
+const RB_KEY_STORAGE = "rebrickable_api_key";
+
+function getRBKey() {
+  return (localStorage.getItem(RB_KEY_STORAGE) || "").trim();
+}
+function setRBKey(key) {
+  const k = (key || "").trim();
+  if (!k) localStorage.removeItem(RB_KEY_STORAGE);
+  else localStorage.setItem(RB_KEY_STORAGE, k);
+}
+
+async function ensureRBKey() {
+  let key = getRBKey();
+  if (key) return key;
+
+  const entered = prompt("Enter your Rebrickable API key (free):");
+  if (!entered) return "";
+  setRBKey(entered);
+  return getRBKey();
+}
+
+function normalizeSetNumberForRB(raw) {
+  const s = (raw || "").trim();
+  if (!s) return "";
+  // If user typed 75304 -> use 75304-1
+  if (/^\d+$/.test(s)) return `${s}-1`;
+  // If already like 75304-1 keep it
+  return s;
+}
+
+async function rebrickableLookup(setNumberRaw) {
+  const key = await ensureRBKey();
+  if (!key) {
+    toast("No API key set.");
+    return null;
+  }
+
+  const setNum = normalizeSetNumberForRB(setNumberRaw);
+  if (!setNum) {
+    toast("Type a set number first.");
+    return null;
+  }
+
+  const url = `https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(setNum)}/?key=${encodeURIComponent(key)}`;
+
+  try {
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        toast("API key rejected. Click API Key and try again.");
+        return null;
+      }
+      toast(`Lookup failed (${res.status}).`);
+      return null;
+    }
+    const data = await res.json();
+    // data.name, data.set_img_url
+    return {
+      name: data?.name || "",
+      img: data?.set_img_url || ""
+    };
+  } catch (e) {
+    console.warn(e);
+    toast("Lookup error (network/CORS).");
+    return null;
+  }
+}
+
 /** ---------- Condition helpers (ONLY 4) ---------- */
 const CONDITION_LABELS = {
   new_sealed: "New (sealed)",
@@ -88,6 +157,7 @@ function openDB() {
       store.createIndex("soldDate", "soldDate");
       store.createIndex("name", "name");
       store.createIndex("batch", "batch");
+      store.createIndex("setNumber", "setNumber");
     };
 
     req.onsuccess = () => resolve(req.result);
@@ -153,6 +223,7 @@ function normalizeFormData(fd) {
     id: obj.id || uid(),
     name: (obj.name || "").trim(),
     setNumber: (obj.setNumber || "").trim(),
+    setImageUrl: (obj.setImageUrl || "").trim(),
     purchaseDate: obj.purchaseDate || "",
     soldDate: obj.soldDate || "",
     condition: normalizeCondition(obj.condition),
@@ -176,6 +247,12 @@ let profitLineChart = null;
 let marketBarChart = null;
 let conditionBarChart = null;
 let batchBarChart = null;
+
+function renderItemThumb(url) {
+  const u = (url || "").trim();
+  if (!u) return "";
+  return `<img class="thumb" src="${escapeHtml(u)}" alt="set" loading="lazy" />`;
+}
 
 function renderTable(list) {
   const tbody = $("#flipTbody");
@@ -203,16 +280,19 @@ function renderTable(list) {
 
     tr.innerHTML = `
       <td>
-        <div style="display:flex;flex-direction:column;gap:6px;">
-          <div style="font-weight:900;">${escapeHtml(itemTitle)}</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            ${statusBadge}
-            ${cond}
-            ${item.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(item.boughtFrom)}</span>` : ""}
-            ${item.buyPayment ? `<span class="badge">💳 ${escapeHtml(item.buyPayment)}</span>` : ""}
-            ${normalizeBatch(item.batch) ? batch : ""}
+        <div style="display:flex;gap:10px;align-items:flex-start;">
+          ${renderItemThumb(item.setImageUrl)}
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <div style="font-weight:900;">${escapeHtml(itemTitle)}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              ${statusBadge}
+              ${cond}
+              ${item.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(item.boughtFrom)}</span>` : ""}
+              ${item.buyPayment ? `<span class="badge">💳 ${escapeHtml(item.buyPayment)}</span>` : ""}
+              ${normalizeBatch(item.batch) ? batch : ""}
+            </div>
+            ${item.notes ? `<div class="small">${escapeHtml(item.notes)}</div>` : ""}
           </div>
-          ${item.notes ? `<div class="small">${escapeHtml(item.notes)}</div>` : ""}
         </div>
       </td>
 
@@ -278,23 +358,18 @@ function renderKPIs(list) {
 }
 
 function updateBatchUIFromAllFlips(flips) {
-  // Update datalist for form autocomplete + batch filter dropdown
   const batches = [...new Set(flips.map(f => normalizeBatch(f.batch)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
   const dl = $("#batchList");
-  if (dl) {
-    dl.innerHTML = batches.map(b => `<option value="${escapeHtml(b)}"></option>`).join("");
-  }
+  if (dl) dl.innerHTML = batches.map(b => `<option value="${escapeHtml(b)}"></option>`).join("");
 
   const bf = $("#batchFilter");
   if (bf) {
     const current = bf.value || "all";
-    const options = [
+    bf.innerHTML = [
       `<option value="all">All Batches</option>`,
       ...batches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)
     ].join("");
-    bf.innerHTML = options;
-    // restore selection if still exists
     if ([...bf.options].some(o => o.value === current)) bf.value = current;
     else bf.value = "all";
   }
@@ -518,6 +593,19 @@ function rerender() {
 }
 
 /** ---------- Form actions ---------- */
+function setPreview(url) {
+  const img = $("#setPhotoPreview");
+  if (!img) return;
+  const u = (url || "").trim();
+  if (!u) {
+    img.removeAttribute("src");
+    img.style.display = "none";
+    return;
+  }
+  img.src = u;
+  img.style.display = "block";
+}
+
 function setForm(item) {
   const f = $("#flipForm");
   if (!f) return;
@@ -525,6 +613,9 @@ function setForm(item) {
   f.id.value = item?.id || "";
   f.name.value = item?.name || "";
   f.setNumber.value = item?.setNumber || "";
+  f.setImageUrl.value = item?.setImageUrl || "";
+  setPreview(item?.setImageUrl || "");
+
   f.purchaseDate.value = item?.purchaseDate || "";
   f.soldDate.value = item?.soldDate || "";
   f.condition.value = normalizeCondition(item?.condition || "new_sealed");
@@ -614,6 +705,7 @@ async function importData(file) {
       id: raw.id || uid(),
       name: (raw.name || "").trim(),
       setNumber: (raw.setNumber || "").trim(),
+      setImageUrl: (raw.setImageUrl || "").trim(),
       purchaseDate: raw.purchaseDate || "",
       soldDate: raw.soldDate || "",
       condition: normalizeCondition(raw.condition),
@@ -682,6 +774,29 @@ async function init() {
   const dd = String(today.getDate()).padStart(2, "0");
   form.purchaseDate.value = `${yyyy}-${mm}-${dd}`;
 
+  // Buttons
+  $("#apiKeyBtn")?.addEventListener("click", async () => {
+    const current = getRBKey();
+    const entered = prompt("Rebrickable API key (stored locally in your browser):", current);
+    if (entered === null) return; // canceled
+    setRBKey(entered);
+    toast(getRBKey() ? "API key saved ✅" : "API key cleared");
+  });
+
+  $("#lookupBtn")?.addEventListener("click", async () => {
+    const setNum = form.setNumber.value;
+    const res = await rebrickableLookup(setNum);
+    if (!res) return;
+
+    // fill name + photo
+    if (res.name) form.name.value = res.name;
+    if (res.img) {
+      form.setImageUrl.value = res.img;
+      setPreview(res.img);
+    }
+    toast("Set info filled ✅");
+  });
+
   form.addEventListener("submit", saveForm);
   $("#resetBtn")?.addEventListener("click", resetForm);
   $("#flipTbody")?.addEventListener("click", handleTableClick);
@@ -704,18 +819,23 @@ async function init() {
 
   allFlips = await txReadAll();
 
-  // Normalize condition to allowed 4 + ensure batch exists
+  // Normalize old records
   let changed = false;
   for (const item of allFlips) {
     const c = normalizeCondition(item.condition);
     if (item.condition !== c) { item.condition = c; changed = true; }
     if (typeof item.batch !== "string") { item.batch = ""; changed = true; }
+    if (typeof item.setImageUrl !== "string") { item.setImageUrl = ""; changed = true; }
     if (changed) { item.updatedAt = Date.now(); await txPut(item); }
     changed = false;
   }
   allFlips = await txReadAll();
 
   updateBatchUIFromAllFlips(allFlips);
+
+  // Hide preview initially
+  setPreview("");
+
   rerender();
 
   // charts might load slightly after Chart.js
