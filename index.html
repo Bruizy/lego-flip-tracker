@@ -9,11 +9,9 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
 
-  <!-- iOS nice-to-have -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
-  <!-- Chart.js (cached by Service Worker for offline use after first load) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
   <script src="app.js" defer></script>
 </head>
@@ -79,8 +77,22 @@
             </label>
 
             <label>
+              Batch (optional)
+              <input name="batch" list="batchList" placeholder="e.g., Batch 1 / FB Lot / Walmart Clearance" />
+              <datalist id="batchList"></datalist>
+              <div class="hint">Use the same batch name across flips to track profit per haul.</div>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
               Notes
               <textarea name="notes" rows="3" placeholder="Condition details, missing parts, strategy, etc."></textarea>
+            </label>
+
+            <label>
+              Bought From
+              <input name="boughtFrom" placeholder="e.g., Walmart, FB Marketplace" />
             </label>
           </div>
 
@@ -110,16 +122,10 @@
 
           <div class="row">
             <label>
-              Bought From
-              <input name="boughtFrom" placeholder="e.g., Walmart, FB Marketplace" />
-            </label>
-            <label>
               Sold On
               <input name="soldOn" placeholder="e.g., eBay, BrickLink, FBMP" />
             </label>
-          </div>
 
-          <div class="row">
             <label>
               Buy Payment Type
               <select name="buyPayment">
@@ -133,7 +139,9 @@
                 <option>Other</option>
               </select>
             </label>
+          </div>
 
+          <div class="row">
             <label>
               Sell Payment Type
               <select name="sellPayment">
@@ -147,6 +155,8 @@
                 <option>Other</option>
               </select>
             </label>
+
+            <label></label>
           </div>
 
           <input type="hidden" name="id" />
@@ -194,6 +204,10 @@
             <div class="chartTitle">Profit by Condition</div>
             <canvas id="conditionBar"></canvas>
           </div>
+          <div class="chartCard">
+            <div class="chartTitle">Profit by Batch (Top 10)</div>
+            <canvas id="batchBar"></canvas>
+          </div>
         </div>
       </section>
 
@@ -216,6 +230,10 @@
               <option value="used_complete">Used (complete)</option>
               <option value="used_incomplete">Used (incomplete)</option>
             </select>
+
+            <select id="batchFilter" title="Filter by batch">
+              <option value="all">All Batches</option>
+            </select>
           </div>
         </div>
 
@@ -232,6 +250,7 @@
                 <th>ROI</th>
                 <th>Sold On</th>
                 <th>Condition</th>
+                <th>Batch</th>
                 <th></th>
               </tr>
             </thead>
@@ -249,3 +268,4 @@
   <div class="toast" id="toast" aria-live="polite"></div>
 </body>
 </html>
+
