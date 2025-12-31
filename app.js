@@ -237,7 +237,9 @@ function normalizeFormData(fd) {
     buyPayment: (obj.buyPayment || "").trim(),
     sellPayment: (obj.sellPayment || "").trim(),
     notes: (obj.notes || "").trim(),
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    boxIncluded: (obj.boxIncluded || "yes"),
+    manualIncluded: (obj.manualIncluded || "yes")
   };
 }
 
@@ -294,6 +296,8 @@ function renderTable(list) {
               ${cond}
               ${item.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(item.boughtFrom)}</span>` : ""}
               ${item.buyPayment ? `<span class="badge">💳 ${escapeHtml(item.buyPayment)}</span>` : ""}
+              ${item.boxIncluded === "yes" ? `<span class="badge">📦 Box</span>` : `<span class="badge">📭 No Box</span>`}
+              ${item.manualIncluded === "yes" ? `<span class="badge">📘 Manual</span>` : `<span class="badge">📄 No Manual</span>`}
               ${normalizeBatch(item.batch) ? batch : ""}
             </div>
             ${item.notes ? `<div class="small">${escapeHtml(item.notes)}</div>` : ""}
@@ -634,6 +638,8 @@ function setForm(item) {
   f.buyPayment.value = item?.buyPayment || "";
   f.sellPayment.value = item?.sellPayment || "";
   f.notes.value = item?.notes || "";
+  f.boxIncluded.value = item?.boxIncluded || "yes";
+  f.manualIncluded.value = item?.manualIncluded || "yes";
 }
 
 function resetForm() {
@@ -724,7 +730,10 @@ async function importData(file) {
       buyPayment: (raw.buyPayment || "").trim(),
       sellPayment: (raw.sellPayment || "").trim(),
       notes: (raw.notes || "").trim(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      boxIncluded: (raw.boxIncluded || "yes"),
+      manualIncluded: (raw.manualIncluded || "yes")
+
     };
     if (!item.name || !item.purchaseDate) continue;
     await txPut(item);
