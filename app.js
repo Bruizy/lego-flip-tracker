@@ -13,7 +13,6 @@ const toNum = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 const ym = (dateStr) => {
-  // "YYYY-MM-DD" -> "YYYY-MM"
   if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
   return dateStr.slice(0, 7);
 };
@@ -21,6 +20,7 @@ const uid = () => crypto.randomUUID?.() ?? `id_${Date.now()}_${Math.random().toS
 
 function toast(msg) {
   const el = $("#toast");
+  if (!el) return;
   el.textContent = msg;
   el.classList.add("show");
   clearTimeout(toast._t);
@@ -36,7 +36,7 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-/** ---------- Condition helpers ---------- */
+/** ---------- Condition helpers (ONLY 4) ---------- */
 const CONDITION_LABELS = {
   new_sealed: "New (sealed)",
   new_openbox: "New (open box)",
@@ -46,20 +46,30 @@ const CONDITION_LABELS = {
 
 function normalizeCondition(v) {
   const key = (v || "").trim();
-  return CONDITION_LABELS[key] ? key : "unknown";
+  return CONDITION_LABELS[key] ? key : "used_incomplete";
 }
 
 function conditionBadge(condKey) {
-  const label = CONDITION_LABELS[condKey] || "Unknown";
-  // emoji mapping for quick scanning
+  const key = normalizeCondition(condKey);
+  const label = CONDITION_LABELS[key];
   const emoji = ({
     new_sealed: "🟩",
     new_openbox: "🟨",
     used_complete: "🟦",
     used_incomplete: "🟧"
-  })[condKey] || "⬜";
+  })[key] || "🟧";
 
   return `<span class="badge cond">${emoji} ${escapeHtml(label)}</span>`;
+}
+
+/** ---------- Batch helpers ---------- */
+function normalizeBatch(v) {
+  return (v || "").trim();
+}
+function batchBadge(batch) {
+  const b = normalizeBatch(batch);
+  if (!b) return `<span class="small">—</span>`;
+  return `<span class="badge batch">📦 ${escapeHtml(b)}</span>`;
 }
 
 /** ---------- IndexedDB ---------- */
@@ -77,6 +87,7 @@ function openDB() {
       store.createIndex("purchaseDate", "purchaseDate");
       store.createIndex("soldDate", "soldDate");
       store.createIndex("name", "name");
+      store.createIndex("batch", "batch");
     };
 
     req.onsuccess = () => resolve(req.result);
@@ -130,7 +141,6 @@ function calc(item) {
   const totalCost = purchaseCost + materialCost + fees;
   const revenue = soldPrice;
   const profit = revenue - totalCost;
-
   const roi = totalCost > 0 ? (profit / totalCost) * 100 : 0;
 
   const sold = !!item.soldDate && revenue > 0;
@@ -146,6 +156,7 @@ function normalizeFormData(fd) {
     purchaseDate: obj.purchaseDate || "",
     soldDate: obj.soldDate || "",
     condition: normalizeCondition(obj.condition),
+    batch: normalizeBatch(obj.batch),
     purchaseCost: toNum(obj.purchaseCost),
     materialCost: toNum(obj.materialCost),
     soldPrice: toNum(obj.soldPrice),
@@ -164,12 +175,13 @@ let allFlips = [];
 let profitLineChart = null;
 let marketBarChart = null;
 let conditionBarChart = null;
+let batchBarChart = null;
 
 function renderTable(list) {
   const tbody = $("#flipTbody");
+  if (!tbody) return;
   tbody.innerHTML = "";
 
-  // newest first by purchase date then updated
   const sorted = [...list].sort((a, b) => {
     const ad = a.purchaseDate || "0000-00-00";
     const bd = b.purchaseDate || "0000-00-00";
@@ -186,8 +198,8 @@ function renderTable(list) {
       ? `<span class="badge sold">✅ Sold</span>`
       : `<span class="badge unsold">🕒 Unsold</span>`;
 
-    const condKey = normalizeCondition(item.condition);
-    const cond = conditionBadge(condKey);
+    const cond = conditionBadge(item.condition);
+    const batch = batchBadge(item.batch);
 
     tr.innerHTML = `
       <td>
@@ -198,6 +210,7 @@ function renderTable(list) {
             ${cond}
             ${item.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(item.boughtFrom)}</span>` : ""}
             ${item.buyPayment ? `<span class="badge">💳 ${escapeHtml(item.buyPayment)}</span>` : ""}
+            ${normalizeBatch(item.batch) ? batch : ""}
           </div>
           ${item.notes ? `<div class="small">${escapeHtml(item.notes)}</div>` : ""}
         </div>
@@ -230,6 +243,7 @@ function renderTable(list) {
       </td>
 
       <td>${cond}</td>
+      <td>${batch}</td>
 
       <td>
         <div class="rowActions">
@@ -257,14 +271,39 @@ function renderKPIs(list) {
 
   const roi = totalCosts > 0 ? (totalProfit / totalCosts) * 100 : 0;
 
-  $("#kpiProfit").textContent = money(totalProfit);
-  $("#kpiRevenue").textContent = money(totalRevenue);
-  $("#kpiCosts").textContent = money(totalCosts);
-  $("#kpiROI").textContent = pct(roi);
+  $("#kpiProfit") && ($("#kpiProfit").textContent = money(totalProfit));
+  $("#kpiRevenue") && ($("#kpiRevenue").textContent = money(totalRevenue));
+  $("#kpiCosts") && ($("#kpiCosts").textContent = money(totalCosts));
+  $("#kpiROI") && ($("#kpiROI").textContent = pct(roi));
+}
+
+function updateBatchUIFromAllFlips(flips) {
+  // Update datalist for form autocomplete + batch filter dropdown
+  const batches = [...new Set(flips.map(f => normalizeBatch(f.batch)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+
+  const dl = $("#batchList");
+  if (dl) {
+    dl.innerHTML = batches.map(b => `<option value="${escapeHtml(b)}"></option>`).join("");
+  }
+
+  const bf = $("#batchFilter");
+  if (bf) {
+    const current = bf.value || "all";
+    const options = [
+      `<option value="all">All Batches</option>`,
+      ...batches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)
+    ].join("");
+    bf.innerHTML = options;
+    // restore selection if still exists
+    if ([...bf.options].some(o => o.value === current)) bf.value = current;
+    else bf.value = "all";
+  }
 }
 
 function renderCharts(list) {
-  // Profit over time (by sold month)
+  if (!window.Chart) return;
+
+  // Profit over time
   const profitByMonth = new Map();
   for (const item of list) {
     const key = ym(item.soldDate);
@@ -275,7 +314,7 @@ function renderCharts(list) {
   const months = [...profitByMonth.keys()].sort();
   const profitVals = months.map(m => profitByMonth.get(m) || 0);
 
-  // Profit by marketplace (soldOn) — only sold items
+  // Profit by marketplace (sold only)
   const profitByMarket = new Map();
   for (const item of list) {
     const { profit, sold } = calc(item);
@@ -283,13 +322,11 @@ function renderCharts(list) {
     const market = (item.soldOn || "").trim() || "Unknown";
     profitByMarket.set(market, (profitByMarket.get(market) || 0) + profit);
   }
-  const markets = [...profitByMarket.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10);
+  const markets = [...profitByMarket.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   const marketLabels = markets.map(([k]) => k);
   const marketVals = markets.map(([, v]) => v);
 
-  // Profit by condition — only sold items
+  // Profit by condition (sold only)
   const profitByCond = new Map();
   for (const item of list) {
     const { profit, sold } = calc(item);
@@ -297,116 +334,157 @@ function renderCharts(list) {
     const c = normalizeCondition(item.condition);
     profitByCond.set(c, (profitByCond.get(c) || 0) + profit);
   }
-  const condOrder = ["new_sealed","new_openbox","used_complete","used_incomplete"];
+  const condOrder = ["new_sealed", "new_openbox", "used_complete", "used_incomplete"];
   const condLabels = condOrder.map(k => CONDITION_LABELS[k]);
   const condVals = condOrder.map(k => profitByCond.get(k) || 0);
 
-  // Wait until Chart is available
-  if (!window.Chart) return;
+  // Profit by batch (sold only)
+  const profitByBatch = new Map();
+  for (const item of list) {
+    const { profit, sold } = calc(item);
+    if (!sold) continue;
+    const b = normalizeBatch(item.batch) || "No Batch";
+    profitByBatch.set(b, (profitByBatch.get(b) || 0) + profit);
+  }
+  const batchesTop = [...profitByBatch.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const batchLabels = batchesTop.map(([k]) => k);
+  const batchVals = batchesTop.map(([, v]) => v);
 
-  const common = {
-    color: "#e5edff",
-    grid: "rgba(255,255,255,0.08)"
-  };
+  const common = { color: "#e5edff", grid: "rgba(255,255,255,0.08)" };
 
-  // Line chart
-  const lineCtx = $("#profitLine").getContext("2d");
-  if (profitLineChart) profitLineChart.destroy();
-  profitLineChart = new Chart(lineCtx, {
-    type: "line",
-    data: {
-      labels: months.length ? months : ["—"],
-      datasets: [{
-        label: "Profit",
-        data: months.length ? profitVals : [0],
-        borderColor: "rgba(34,197,94,0.95)",
-        backgroundColor: "rgba(34,197,94,0.20)",
-        fill: true,
-        tension: 0.25,
-        pointRadius: 3
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: { labels: { color: common.color } },
-        tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+  // Line
+  const lineEl = $("#profitLine");
+  if (lineEl) {
+    const lineCtx = lineEl.getContext("2d");
+    if (profitLineChart) profitLineChart.destroy();
+    profitLineChart = new Chart(lineCtx, {
+      type: "line",
+      data: {
+        labels: months.length ? months : ["—"],
+        datasets: [{
+          label: "Profit",
+          data: months.length ? profitVals : [0],
+          borderColor: "rgba(34,197,94,0.95)",
+          backgroundColor: "rgba(34,197,94,0.20)",
+          fill: true,
+          tension: 0.25,
+          pointRadius: 3
+        }]
       },
-      scales: {
-        x: { ticks: { color: common.color }, grid: { color: common.grid } },
-        y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-      }
-    }
-  });
-
-  // Marketplace bar
-  const barCtx = $("#marketBar").getContext("2d");
-  if (marketBarChart) marketBarChart.destroy();
-  marketBarChart = new Chart(barCtx, {
-    type: "bar",
-    data: {
-      labels: marketLabels.length ? marketLabels : ["—"],
-      datasets: [{
-        label: "Profit",
-        data: marketLabels.length ? marketVals : [0],
-        backgroundColor: (ctx) => {
-          const v = ctx.raw ?? 0;
-          return v >= 0 ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)";
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: common.color } },
+          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
         },
-        borderColor: "rgba(255,255,255,0.18)",
-        borderWidth: 1
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: { labels: { color: common.color } },
-        tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
-      },
-      scales: {
-        x: { ticks: { color: common.color }, grid: { color: common.grid } },
-        y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+        scales: {
+          x: { ticks: { color: common.color }, grid: { color: common.grid } },
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+        }
       }
-    }
-  });
+    });
+  }
+
+  // Market bar
+  const marketEl = $("#marketBar");
+  if (marketEl) {
+    const barCtx = marketEl.getContext("2d");
+    if (marketBarChart) marketBarChart.destroy();
+    marketBarChart = new Chart(barCtx, {
+      type: "bar",
+      data: {
+        labels: marketLabels.length ? marketLabels : ["—"],
+        datasets: [{
+          label: "Profit",
+          data: marketLabels.length ? marketVals : [0],
+          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)",
+          borderColor: "rgba(255,255,255,0.18)",
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: common.color } },
+          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+        },
+        scales: {
+          x: { ticks: { color: common.color }, grid: { color: common.grid } },
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+        }
+      }
+    });
+  }
 
   // Condition bar
-  const condCtx = $("#conditionBar").getContext("2d");
-  if (conditionBarChart) conditionBarChart.destroy();
-  conditionBarChart = new Chart(condCtx, {
-    type: "bar",
-    data: {
-      labels: condLabels,
-      datasets: [{
-        label: "Profit",
-        data: condVals,
-        backgroundColor: (ctx) => {
-          const v = ctx.raw ?? 0;
-          return v >= 0 ? "rgba(59,130,246,0.45)" : "rgba(239,68,68,0.55)";
-        },
-        borderColor: "rgba(255,255,255,0.18)",
-        borderWidth: 1
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: { labels: { color: common.color } },
-        tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+  const condEl = $("#conditionBar");
+  if (condEl) {
+    const condCtx = condEl.getContext("2d");
+    if (conditionBarChart) conditionBarChart.destroy();
+    conditionBarChart = new Chart(condCtx, {
+      type: "bar",
+      data: {
+        labels: condLabels,
+        datasets: [{
+          label: "Profit",
+          data: condVals,
+          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(59,130,246,0.45)" : "rgba(239,68,68,0.55)",
+          borderColor: "rgba(255,255,255,0.18)",
+          borderWidth: 1
+        }]
       },
-      scales: {
-        x: { ticks: { color: common.color }, grid: { color: common.grid } },
-        y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: common.color } },
+          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+        },
+        scales: {
+          x: { ticks: { color: common.color }, grid: { color: common.grid } },
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+        }
       }
-    }
-  });
+    });
+  }
+
+  // Batch bar
+  const batchEl = $("#batchBar");
+  if (batchEl) {
+    const batchCtx = batchEl.getContext("2d");
+    if (batchBarChart) batchBarChart.destroy();
+    batchBarChart = new Chart(batchCtx, {
+      type: "bar",
+      data: {
+        labels: batchLabels.length ? batchLabels : ["—"],
+        datasets: [{
+          label: "Profit",
+          data: batchLabels.length ? batchVals : [0],
+          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(168,85,247,0.45)" : "rgba(239,68,68,0.55)",
+          borderColor: "rgba(255,255,255,0.18)",
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: common.color } },
+          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+        },
+        scales: {
+          x: { ticks: { color: common.color }, grid: { color: common.grid } },
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+        }
+      }
+    });
+  }
 }
 
 /** ---------- Filters ---------- */
 function getFiltered() {
-  const q = ($("#searchInput").value || "").trim().toLowerCase();
-  const status = $("#statusFilter").value;
+  const q = ($("#searchInput")?.value || "").trim().toLowerCase();
+  const status = $("#statusFilter")?.value || "all";
   const condFilter = $("#conditionFilter")?.value || "all";
+  const batchFilter = $("#batchFilter")?.value || "all";
 
   return allFlips.filter(item => {
     const { sold } = calc(item);
@@ -417,11 +495,15 @@ function getFiltered() {
     const itemCond = normalizeCondition(item.condition);
     if (condFilter !== "all" && itemCond !== condFilter) return false;
 
+    const b = normalizeBatch(item.batch);
+    if (batchFilter !== "all" && b !== batchFilter) return false;
+
     if (!q) return true;
     const hay = [
       item.name, item.setNumber, item.boughtFrom, item.soldOn,
       item.buyPayment, item.sellPayment, item.notes,
-      CONDITION_LABELS[itemCond]
+      CONDITION_LABELS[itemCond] || "",
+      item.batch || ""
     ].join(" ").toLowerCase();
 
     return hay.includes(q);
@@ -438,12 +520,15 @@ function rerender() {
 /** ---------- Form actions ---------- */
 function setForm(item) {
   const f = $("#flipForm");
+  if (!f) return;
+
   f.id.value = item?.id || "";
   f.name.value = item?.name || "";
   f.setNumber.value = item?.setNumber || "";
   f.purchaseDate.value = item?.purchaseDate || "";
   f.soldDate.value = item?.soldDate || "";
   f.condition.value = normalizeCondition(item?.condition || "new_sealed");
+  f.batch.value = item?.batch || "";
   f.purchaseCost.value = item?.purchaseCost ?? "";
   f.materialCost.value = item?.materialCost ?? 0;
   f.soldPrice.value = item?.soldPrice ?? 0;
@@ -457,7 +542,7 @@ function setForm(item) {
 
 function resetForm() {
   setForm(null);
-  $("#saveBtn").textContent = "Save Flip";
+  $("#saveBtn") && ($("#saveBtn").textContent = "Save Flip");
 }
 
 async function saveForm(ev) {
@@ -472,6 +557,7 @@ async function saveForm(ev) {
   toast("Saved ✅");
 
   allFlips = await txReadAll();
+  updateBatchUIFromAllFlips(allFlips);
   resetForm();
   rerender();
 }
@@ -484,7 +570,7 @@ async function handleTableClick(ev) {
     const item = allFlips.find(x => x.id === editId);
     if (!item) return;
     setForm(item);
-    $("#saveBtn").textContent = "Update Flip";
+    $("#saveBtn") && ($("#saveBtn").textContent = "Update Flip");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -496,6 +582,7 @@ async function handleTableClick(ev) {
     await txDelete(delId);
     toast("Deleted 🗑️");
     allFlips = await txReadAll();
+    updateBatchUIFromAllFlips(allFlips);
     rerender();
   }
 }
@@ -517,18 +604,10 @@ async function exportData() {
 async function importData(file) {
   const text = await file.text();
   let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    toast("Invalid JSON file.");
-    return;
-  }
+  try { parsed = JSON.parse(text); } catch { toast("Invalid JSON file."); return; }
 
   const flips = Array.isArray(parsed) ? parsed : parsed.flips;
-  if (!Array.isArray(flips)) {
-    toast("No flips found in file.");
-    return;
-  }
+  if (!Array.isArray(flips)) { toast("No flips found in file."); return; }
 
   for (const raw of flips) {
     const item = {
@@ -538,6 +617,7 @@ async function importData(file) {
       purchaseDate: raw.purchaseDate || "",
       soldDate: raw.soldDate || "",
       condition: normalizeCondition(raw.condition),
+      batch: normalizeBatch(raw.batch),
       purchaseCost: toNum(raw.purchaseCost),
       materialCost: toNum(raw.materialCost),
       soldPrice: toNum(raw.soldPrice),
@@ -554,6 +634,7 @@ async function importData(file) {
   }
 
   allFlips = await txReadAll();
+  updateBatchUIFromAllFlips(allFlips);
   rerender();
   toast("Imported ✅");
 }
@@ -568,16 +649,16 @@ function setupInstallFlow() {
   window.addEventListener("beforeinstallprompt", (e) => {
     e.preventDefault();
     deferredPrompt = e;
-    installBtn.hidden = false;
-    hint.textContent = "Install to your phone for offline use";
+    if (installBtn) installBtn.hidden = false;
+    if (hint) hint.textContent = "Install to your phone for offline use";
   });
 
-  installBtn.addEventListener("click", async () => {
+  installBtn?.addEventListener("click", async () => {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
     const res = await deferredPrompt.userChoice;
     deferredPrompt = null;
-    installBtn.hidden = true;
+    if (installBtn) installBtn.hidden = true;
     toast(res?.outcome === "accepted" ? "Installed 🎉" : "Install canceled");
   });
 }
@@ -585,34 +666,33 @@ function setupInstallFlow() {
 /** ---------- Service worker ---------- */
 async function registerSW() {
   if (!("serviceWorker" in navigator)) return;
-  try {
-    await navigator.serviceWorker.register("./sw.js");
-  } catch (e) {
-    console.warn("SW registration failed:", e);
-  }
+  try { await navigator.serviceWorker.register("./sw.js"); }
+  catch (e) { console.warn("SW registration failed:", e); }
 }
 
 /** ---------- Init ---------- */
 async function init() {
-  // default dates
+  const form = $("#flipForm");
+  if (!form) return;
+
+  // default purchase date
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, "0");
   const dd = String(today.getDate()).padStart(2, "0");
-  $("#flipForm").purchaseDate.value = `${yyyy}-${mm}-${dd}`;
+  form.purchaseDate.value = `${yyyy}-${mm}-${dd}`;
 
-  $("#flipForm").addEventListener("submit", saveForm);
-  $("#resetBtn").addEventListener("click", resetForm);
+  form.addEventListener("submit", saveForm);
+  $("#resetBtn")?.addEventListener("click", resetForm);
+  $("#flipTbody")?.addEventListener("click", handleTableClick);
 
-  $("#flipTbody").addEventListener("click", handleTableClick);
+  $("#searchInput")?.addEventListener("input", rerender);
+  $("#statusFilter")?.addEventListener("change", rerender);
+  $("#conditionFilter")?.addEventListener("change", rerender);
+  $("#batchFilter")?.addEventListener("change", rerender);
 
-  $("#searchInput").addEventListener("input", rerender);
-  $("#statusFilter").addEventListener("change", rerender);
-  $("#conditionFilter").addEventListener("change", rerender);
-
-  $("#exportBtn").addEventListener("click", exportData);
-
-  $("#importInput").addEventListener("change", async (e) => {
+  $("#exportBtn")?.addEventListener("click", exportData);
+  $("#importInput")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     await importData(file);
@@ -624,35 +704,32 @@ async function init() {
 
   allFlips = await txReadAll();
 
-  // If old data exists without condition, default it safely (no user work)
-  let migrated = false;
+  // Normalize condition to allowed 4 + ensure batch exists
+  let changed = false;
   for (const item of allFlips) {
-    if (!item.condition) {
-      item.condition = "unknown";
-      item.updatedAt = Date.now();
-      await txPut(item);
-      migrated = true;
-    } else {
-      item.condition = normalizeCondition(item.condition);
-    }
+    const c = normalizeCondition(item.condition);
+    if (item.condition !== c) { item.condition = c; changed = true; }
+    if (typeof item.batch !== "string") { item.batch = ""; changed = true; }
+    if (changed) { item.updatedAt = Date.now(); await txPut(item); }
+    changed = false;
   }
-  if (migrated) {
-    allFlips = await txReadAll();
-  }
+  allFlips = await txReadAll();
 
+  updateBatchUIFromAllFlips(allFlips);
   rerender();
 
-  // Charts might load slightly after; re-render once Chart.js is ready
+  // charts might load slightly after Chart.js
   let tries = 0;
-  const waitChart = setInterval(() => {
+  const t = setInterval(() => {
     tries++;
     if (window.Chart) {
-      clearInterval(waitChart);
+      clearInterval(t);
       renderCharts(getFiltered());
     }
-    if (tries > 40) clearInterval(waitChart);
+    if (tries > 40) clearInterval(t);
   }, 100);
 }
 
 init();
+
   
