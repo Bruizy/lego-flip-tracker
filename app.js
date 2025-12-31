@@ -251,7 +251,12 @@ let batchBarChart = null;
 function renderItemThumb(url) {
   const u = (url || "").trim();
   if (!u) return "";
-  return `<img class="thumb" src="${escapeHtml(u)}" alt="set" loading="lazy" />`;
+  const safe = escapeHtml(u);
+  return `
+    <a href="${safe}" target="_blank" rel="noopener">
+      <img class="thumb clickable" src="${safe}" alt="set" loading="lazy" />
+    </a>
+  `;
 }
 
 function renderTable(list) {
