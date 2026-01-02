@@ -265,4 +265,32 @@ input:focus, select:focus, textarea:focus {
   background: rgba(168, 85, 247, 0.10);
 }
 
+/* Top tabs */
+.tabs{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:6px;
+}
+.tabBtn{
+  border:1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.9);
+  padding:6px 10px;
+  border-radius:10px;
+  font-weight:700;
+  cursor:pointer;
+}
+.tabBtn.active{
+  background: rgba(59,130,246,0.25);
+  border-color: rgba(59,130,246,0.55);
+}
+
+/* Views */
+.view{ display:none; }
+.view.active{ display:block; }
+
+/* Make single-view layout feel nicer */
+.view .card{ margin-bottom:16px; }
+
 
