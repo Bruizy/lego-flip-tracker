@@ -37,10 +37,7 @@ function escapeHtml(s) {
 
 /** ---------- Rebrickable ---------- */
 const RB_KEY_STORAGE = "rebrickable_api_key";
-
-function getRBKey() {
-  return (localStorage.getItem(RB_KEY_STORAGE) || "").trim();
-}
+function getRBKey() { return (localStorage.getItem(RB_KEY_STORAGE) || "").trim(); }
 function setRBKey(key) {
   const k = (key || "").trim();
   if (!k) localStorage.removeItem(RB_KEY_STORAGE);
@@ -49,7 +46,6 @@ function setRBKey(key) {
 async function ensureRBKey() {
   let key = getRBKey();
   if (key) return key;
-
   const entered = prompt("Enter your Rebrickable API key (free):");
   if (!entered) return "";
   setRBKey(entered);
@@ -63,34 +59,21 @@ function normalizeSetNumberForRB(raw) {
 }
 async function rebrickableLookup(setNumberRaw) {
   const key = await ensureRBKey();
-  if (!key) {
-    toast("No API key set.");
-    return null;
-  }
+  if (!key) { toast("No API key set."); return null; }
 
   const setNum = normalizeSetNumberForRB(setNumberRaw);
-  if (!setNum) {
-    toast("Type a set number first.");
-    return null;
-  }
+  if (!setNum) { toast("Type a set number first."); return null; }
 
   const url = `https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(setNum)}/?key=${encodeURIComponent(key)}`;
-
   try {
     const res = await fetch(url, { method: "GET" });
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) {
-        toast("API key rejected. Click API Key and try again.");
-        return null;
-      }
-      toast(`Lookup failed (${res.status}).`);
+      if (res.status === 401 || res.status === 403) toast("API key rejected. Click API Key and try again.");
+      else toast(`Lookup failed (${res.status}).`);
       return null;
     }
     const data = await res.json();
-    return {
-      name: data?.name || "",
-      img: data?.set_img_url || ""
-    };
+    return { name: data?.name || "", img: data?.set_img_url || "" };
   } catch (e) {
     console.warn(e);
     toast("Lookup error (network/CORS).");
@@ -105,12 +88,10 @@ const CONDITION_LABELS = {
   used_complete: "Used (complete)",
   used_incomplete: "Used (incomplete)"
 };
-
 function normalizeCondition(v) {
   const key = (v || "").trim();
   return CONDITION_LABELS[key] ? key : "used_incomplete";
 }
-
 function conditionBadge(condKey) {
   const key = normalizeCondition(condKey);
   const label = CONDITION_LABELS[key];
@@ -120,14 +101,11 @@ function conditionBadge(condKey) {
     used_complete: "🟦",
     used_incomplete: "🟧"
   })[key] || "🟧";
-
   return `<span class="badge cond">${emoji} ${escapeHtml(label)}</span>`;
 }
 
 /** ---------- Batch helpers ---------- */
-function normalizeBatch(v) {
-  return (v || "").trim();
-}
+function normalizeBatch(v) { return (v || "").trim(); }
 function batchBadge(batch) {
   const b = normalizeBatch(batch);
   if (!b) return `<span class="small">—</span>`;
@@ -135,12 +113,6 @@ function batchBadge(batch) {
 }
 
 /** ---------- Expenses: Category -> Cost Bucket ---------- */
-/**
- * You wanted: expenses affect TOTAL profit + graphs, but by bucket:
- * - Material bucket: Supplies, Parts
- * - Shipping bucket: Shipping
- * - Other bucket: Gas, Fees (other), Other
- */
 const EXPENSE_CATEGORY_MAP = {
   Supplies: "material",
   Parts: "material",
@@ -152,9 +124,11 @@ const EXPENSE_CATEGORY_MAP = {
 
 /** ---------- IndexedDB ---------- */
 const DB_NAME = "legoFlipDB";
-const DB_VERSION = 2; // expenses store
-const STORE = "flips";
+const DB_VERSION = 3; // inventory + sales + expenses
+const INVENTORY_STORE = "inventory";
+const SALES_STORE = "sales";
 const EXPENSES_STORE = "expenses";
+const OLD_FLIPS_STORE = "flips"; // legacy (optional)
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -163,30 +137,30 @@ function openDB() {
     req.onupgradeneeded = () => {
       const db = req.result;
 
-      // Flips store
-      if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: "id" });
-        store.createIndex("purchaseDate", "purchaseDate");
-        store.createIndex("soldDate", "soldDate");
-        store.createIndex("name", "name");
-        store.createIndex("batch", "batch");
-        store.createIndex("setNumber", "setNumber");
-      } else {
-        const tx = req.transaction;
-        const store = tx.objectStore(STORE);
-        if (!store.indexNames.contains("purchaseDate")) store.createIndex("purchaseDate", "purchaseDate");
-        if (!store.indexNames.contains("soldDate")) store.createIndex("soldDate", "soldDate");
-        if (!store.indexNames.contains("name")) store.createIndex("name", "name");
-        if (!store.indexNames.contains("batch")) store.createIndex("batch", "batch");
-        if (!store.indexNames.contains("setNumber")) store.createIndex("setNumber", "setNumber");
+      if (!db.objectStoreNames.contains(INVENTORY_STORE)) {
+        const s = db.createObjectStore(INVENTORY_STORE, { keyPath: "id" });
+        s.createIndex("purchaseDate", "purchaseDate");
+        s.createIndex("batch", "batch");
+        s.createIndex("setNumber", "setNumber");
+        s.createIndex("name", "name");
+        s.createIndex("status", "status");
       }
 
-      // Expenses store
+      if (!db.objectStoreNames.contains(SALES_STORE)) {
+        const s = db.createObjectStore(SALES_STORE, { keyPath: "id" });
+        s.createIndex("soldDate", "soldDate");
+        s.createIndex("inventoryId", "inventoryId");
+        s.createIndex("soldOn", "soldOn");
+      }
+
       if (!db.objectStoreNames.contains(EXPENSES_STORE)) {
         const es = db.createObjectStore(EXPENSES_STORE, { keyPath: "id" });
         es.createIndex("date", "date");
         es.createIndex("category", "category");
       }
+
+      // We intentionally do NOT delete OLD_FLIPS_STORE if present.
+      // Migration (if needed) is handled in init().
     };
 
     req.onsuccess = () => resolve(req.result);
@@ -194,11 +168,11 @@ function openDB() {
   });
 }
 
-async function txReadAll() {
+async function txGetAll(storeName) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const store = tx.objectStore(STORE);
+    const tx = db.transaction(storeName, "readonly");
+    const store = tx.objectStore(storeName);
     const req = store.getAll();
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => reject(req.error);
@@ -206,11 +180,11 @@ async function txReadAll() {
   });
 }
 
-async function txPut(item) {
+async function txPut(storeName, item) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    const store = tx.objectStore(STORE);
+    const tx = db.transaction(storeName, "readwrite");
+    const store = tx.objectStore(storeName);
     const req = store.put(item);
     req.onsuccess = () => resolve(true);
     req.onerror = () => reject(req.error);
@@ -218,11 +192,11 @@ async function txPut(item) {
   });
 }
 
-async function txDelete(id) {
+async function txDelete(storeName, id) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    const store = tx.objectStore(STORE);
+    const tx = db.transaction(storeName, "readwrite");
+    const store = tx.objectStore(storeName);
     const req = store.delete(id);
     req.onsuccess = () => resolve(true);
     req.onerror = () => reject(req.error);
@@ -230,48 +204,11 @@ async function txDelete(id) {
   });
 }
 
-/** ---------- Expenses DB helpers ---------- */
-async function txReadAllExpenses() {
+async function txClear(storeName) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(EXPENSES_STORE, "readonly");
-    const store = tx.objectStore(EXPENSES_STORE);
-    const req = store.getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-    tx.oncomplete = () => db.close();
-  });
-}
-
-async function txPutExpense(item) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(EXPENSES_STORE, "readwrite");
-    const store = tx.objectStore(EXPENSES_STORE);
-    const req = store.put(item);
-    req.onsuccess = () => resolve(true);
-    req.onerror = () => reject(req.error);
-    tx.oncomplete = () => db.close();
-  });
-}
-
-async function txDeleteExpense(id) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(EXPENSES_STORE, "readwrite");
-    const store = tx.objectStore(EXPENSES_STORE);
-    const req = store.delete(id);
-    req.onsuccess = () => resolve(true);
-    req.onerror = () => reject(req.error);
-    tx.oncomplete = () => db.close();
-  });
-}
-
-async function txClearExpenses() {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(EXPENSES_STORE, "readwrite");
-    const store = tx.objectStore(EXPENSES_STORE);
+    const tx = db.transaction(storeName, "readwrite");
+    const store = tx.objectStore(storeName);
     const req = store.clear();
     req.onsuccess = () => resolve(true);
     req.onerror = () => reject(req.error);
@@ -279,37 +216,59 @@ async function txClearExpenses() {
   });
 }
 
-/** ---------- Domain logic ---------- */
-function isSold(item) {
-  const soldPrice = toNum(item.soldPrice);
-  return !!item.soldDate && soldPrice > 0;
+async function storeExists(storeName) {
+  const db = await openDB();
+  const exists = db.objectStoreNames.contains(storeName);
+  db.close();
+  return exists;
 }
 
-/**
- * Direct per-flip numbers (does NOT include global expenses)
- */
-function calcFlip(item) {
-  const purchase = toNum(item.purchaseCost);
-  const material = toNum(item.materialCost);
-  const shipping = toNum(item.fees);
-  const revenue = toNum(item.soldPrice);
-  const directCost = purchase + material + shipping;
-  const profit = revenue - directCost;
-  return { revenue, purchase, material, shipping, directCost, profit, sold: isSold(item) };
+/** ---------- In-memory state ---------- */
+let inventory = []; // inventory items
+let sales = [];     // sales records
+let expenses = [];  // expenses records
+
+let profitLineChart = null;
+let marketBarChart = null;
+let conditionBarChart = null;
+let batchBarChart = null;
+
+/** ---------- Domain: inventory + sales ---------- */
+function isSoldItem(invItem) {
+  return invItem?.status === "sold";
 }
 
-/**
- * Build monthly expense buckets
- */
-function expenseBucketsByMonth(expenses) {
+function getSaleByInventoryId(invId) {
+  return sales.find(s => s.inventoryId === invId) || null;
+}
+
+function calcSaleNet(invItem, saleRec, allocator) {
+  if (!invItem || !saleRec) return null;
+
+  const revenue = toNum(saleRec.soldPrice);
+  const purchase = toNum(invItem.purchaseCost);
+  const material = toNum(invItem.materialCost);
+  const shipping = toNum(saleRec.fees);
+
+  const alloc = allocator.allocatedExpenseForSale(saleRec);
+  const profitNet = revenue - purchase - material - shipping - alloc.total;
+
+  return {
+    revenue, purchase, material, shipping,
+    alloc,
+    profitNet
+  };
+}
+
+/** ---------- Expense allocation (by sold month revenue share) ---------- */
+function expenseBucketsByMonth(expensesList) {
   const byMonth = new Map(); // ym -> { material, shipping, other, total }
-  for (const e of expenses) {
+  for (const e of expensesList) {
     const key = ym(e.date);
     if (!key) continue;
     const amt = toNum(e.amount);
     if (amt <= 0) continue;
     const bucket = EXPENSE_CATEGORY_MAP[(e.category || "").trim()] || "other";
-
     if (!byMonth.has(key)) byMonth.set(key, { material: 0, shipping: 0, other: 0, total: 0 });
     const obj = byMonth.get(key);
     obj[bucket] += amt;
@@ -318,39 +277,30 @@ function expenseBucketsByMonth(expenses) {
   return byMonth;
 }
 
-/**
- * Allocate monthly expenses to sold flips in that same sold-month, proportionally by revenue.
- * This makes profit charts + marketplace/condition/batch totals consistent.
- */
-function buildExpenseAllocator(flips, expenses) {
-  const expByMonth = expenseBucketsByMonth(expenses);
+function buildExpenseAllocator(salesList, expensesList) {
+  const expByMonth = expenseBucketsByMonth(expensesList);
 
-  // Precompute sold revenue totals by month
-  const soldRevByMonth = new Map(); // ym -> total revenue
-  const soldCountByMonth = new Map(); // ym -> count sold
-  for (const f of flips) {
-    if (!isSold(f)) continue;
-    const key = ym(f.soldDate);
+  // total revenue by month (sold month)
+  const revByMonth = new Map();
+  const countByMonth = new Map();
+  for (const s of salesList) {
+    const key = ym(s.soldDate);
     if (!key) continue;
-    const rev = toNum(f.soldPrice);
-    soldRevByMonth.set(key, (soldRevByMonth.get(key) || 0) + rev);
-    soldCountByMonth.set(key, (soldCountByMonth.get(key) || 0) + 1);
+    const rev = toNum(s.soldPrice);
+    revByMonth.set(key, (revByMonth.get(key) || 0) + rev);
+    countByMonth.set(key, (countByMonth.get(key) || 0) + 1);
   }
 
-  function allocatedExpenseForFlip(flip) {
-    if (!isSold(flip)) return { material: 0, shipping: 0, other: 0, total: 0 };
-
-    const key = ym(flip.soldDate);
+  function allocatedExpenseForSale(saleRec) {
+    const key = ym(saleRec?.soldDate);
     if (!key) return { material: 0, shipping: 0, other: 0, total: 0 };
-
     const monthExp = expByMonth.get(key);
     if (!monthExp) return { material: 0, shipping: 0, other: 0, total: 0 };
 
-    const totalRev = soldRevByMonth.get(key) || 0;
-    const count = soldCountByMonth.get(key) || 0;
-    const rev = toNum(flip.soldPrice);
+    const totalRev = revByMonth.get(key) || 0;
+    const count = countByMonth.get(key) || 0;
+    const rev = toNum(saleRec?.soldPrice);
 
-    // If revenue sum is 0 (rare), split evenly among sold flips that month.
     const share = totalRev > 0 ? (rev / totalRev) : (count > 0 ? 1 / count : 0);
 
     return {
@@ -361,182 +311,113 @@ function buildExpenseAllocator(flips, expenses) {
     };
   }
 
-  return { expByMonth, allocatedExpenseForFlip };
+  return { expByMonth, allocatedExpenseForSale };
 }
 
-/**
- * Full profit for flip including allocated expenses
- */
-function calcNet(flip, allocator) {
-  const base = calcFlip(flip);
-  const alloc = allocator.allocatedExpenseForFlip(flip);
-  const profit = base.profit - alloc.total;
-  return { ...base, alloc, profitNet: profit };
+/** ---------- Rendering helpers ---------- */
+function renderThumb(url, imgId) {
+  const img = $(imgId);
+  if (!img) return;
+  const u = (url || "").trim();
+  if (!u) {
+    img.removeAttribute("src");
+    img.style.display = "none";
+    return;
+  }
+  img.src = u;
+  img.style.display = "block";
 }
 
-function normalizeFormData(fd) {
-  const obj = Object.fromEntries(fd.entries());
-  return {
-    id: obj.id || uid(),
-    name: (obj.name || "").trim(),
-    setNumber: (obj.setNumber || "").trim(),
-    setImageUrl: (obj.setImageUrl || "").trim(),
-    purchaseDate: obj.purchaseDate || "",
-    soldDate: obj.soldDate || "",
-    condition: normalizeCondition(obj.condition),
-    batch: normalizeBatch(obj.batch),
-    purchaseCost: toNum(obj.purchaseCost),
-    materialCost: toNum(obj.materialCost),
-    soldPrice: toNum(obj.soldPrice),
-    fees: toNum(obj.fees),
-    boughtFrom: (obj.boughtFrom || "").trim(),
-    soldOn: (obj.soldOn || "").trim(),
-    buyPayment: (obj.buyPayment || "").trim(),
-    sellPayment: (obj.sellPayment || "").trim(),
-    notes: (obj.notes || "").trim(),
-    updatedAt: Date.now(),
-    boxIncluded: (obj.boxIncluded || "yes"),
-    manualIncluded: (obj.manualIncluded || "yes")
-  };
-}
-
-/** ---------- Rendering ---------- */
-let allFlips = [];
-let allExpenses = [];
-
-let profitLineChart = null;
-let marketBarChart = null;
-let conditionBarChart = null;
-let batchBarChart = null;
-
-function renderItemThumb(url) {
+function renderItemThumbHTML(url) {
   const u = (url || "").trim();
   if (!u) return "";
   const safe = escapeHtml(u);
-  return `
-    <a href="${safe}" target="_blank" rel="noopener">
-      <img class="thumb clickable" src="${safe}" alt="set" loading="lazy" />
-    </a>
-  `;
+  return `<a href="${safe}" target="_blank" rel="noopener"><img class="thumb clickable" src="${safe}" alt="set" loading="lazy" /></a>`;
 }
 
-function renderTable(list, allocator) {
-  const tbody = $("#flipTbody");
-  if (!tbody) return;
-  tbody.innerHTML = "";
+/** ---------- Inventory list + filters ---------- */
+function updateBatchFilter() {
+  const batches = [...new Set(inventory.map(i => normalizeBatch(i.batch)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const bf = $("#batchFilter");
+  if (!bf) return;
 
-  const sorted = [...list].sort((a, b) => {
-    const ad = a.purchaseDate || "0000-00-00";
-    const bd = b.purchaseDate || "0000-00-00";
-    if (ad !== bd) return bd.localeCompare(ad);
-    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  const current = bf.value || "all";
+  bf.innerHTML = [
+    `<option value="all">All Batches</option>`,
+    ...batches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)
+  ].join("");
+
+  if ([...bf.options].some(o => o.value === current)) bf.value = current;
+  else bf.value = "all";
+}
+
+function updateInventoryDatalist() {
+  const dl = $("#inventoryList");
+  if (!dl) return;
+
+  // only in_stock items (since you "select item to sell")
+  const inStock = inventory.filter(i => i.status !== "sold");
+
+  dl.innerHTML = inStock.map(i => {
+    const label = `${(i.setNumber || "").trim()} ${i.name || ""}`.trim();
+    // store id in a data attribute trick: we will resolve by matching label later
+    return `<option value="${escapeHtml(label)}"></option>`;
+  }).join("");
+}
+
+function resolveInventoryPickToId(text) {
+  const t = (text || "").trim().toLowerCase();
+  if (!t) return "";
+
+  // Try exact match on combined label
+  for (const i of inventory) {
+    if (i.status === "sold") continue;
+    const label = `${(i.setNumber || "").trim()} ${i.name || ""}`.trim().toLowerCase();
+    if (label === t) return i.id;
+  }
+
+  // Try by set number contains
+  const maybeNum = (text || "").trim();
+  const bySet = inventory.find(i => i.status !== "sold" && (i.setNumber || "").trim() === maybeNum);
+  if (bySet) return bySet.id;
+
+  // Try by partial name match (first match)
+  const byName = inventory.find(i => i.status !== "sold" && (i.name || "").toLowerCase().includes(t));
+  return byName?.id || "";
+}
+
+function getFilteredInventoryView() {
+  const q = ($("#searchInput")?.value || "").trim().toLowerCase();
+  const status = $("#statusFilter")?.value || "all";
+  const condFilter = $("#conditionFilter")?.value || "all";
+  const batchFilter = $("#batchFilter")?.value || "all";
+
+  return inventory.filter(i => {
+    const sold = isSoldItem(i);
+
+    if (status === "sold" && !sold) return false;
+    if (status === "in_stock" && sold) return false;
+
+    const itemCond = normalizeCondition(i.condition);
+    if (condFilter !== "all" && itemCond !== condFilter) return false;
+
+    const b = normalizeBatch(i.batch);
+    if (batchFilter !== "all" && b !== batchFilter) return false;
+
+    if (!q) return true;
+
+    const sale = getSaleByInventoryId(i.id);
+    const hay = [
+      i.name, i.setNumber, i.boughtFrom, i.buyPayment,
+      i.batch, CONDITION_LABELS[itemCond] || "",
+      sale?.soldOn || "", sale?.sellPayment || "", sale?.notes || ""
+    ].join(" ").toLowerCase();
+
+    return hay.includes(q);
   });
-
-  for (const item of sorted) {
-    const base = calcFlip(item);
-    const net = calcNet(item, allocator);
-
-    const tr = document.createElement("tr");
-    const itemTitle = `${item.name || "(unnamed)"}${item.setNumber ? ` • #${item.setNumber}` : ""}`;
-    const statusBadge = base.sold
-      ? `<span class="badge sold">✅ Sold</span>`
-      : `<span class="badge unsold">🕒 Unsold</span>`;
-
-    const cond = conditionBadge(item.condition);
-    const batch = batchBadge(item.batch);
-
-    // Table keeps "Costs" column as DIRECT cost (purchase+perflip material+perflip shipping)
-    // Profit column shows PROFIT AFTER ALLOCATED EXPENSES (what you asked)
-    tr.innerHTML = `
-      <td>
-        <div style="display:flex;gap:10px;align-items:flex-start;">
-          ${renderItemThumb(item.setImageUrl)}
-          <div style="display:flex;flex-direction:column;gap:6px;">
-            <div style="font-weight:900;">${escapeHtml(itemTitle)}</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-              ${statusBadge}
-              ${cond}
-              ${item.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(item.boughtFrom)}</span>` : ""}
-              ${item.buyPayment ? `<span class="badge">💳 ${escapeHtml(item.buyPayment)}</span>` : ""}
-              ${item.boxIncluded === "yes" ? `<span class="badge">📦 Box</span>` : `<span class="badge">📭 No Box</span>`}
-              ${item.manualIncluded === "yes" ? `<span class="badge">📘 Manual</span>` : `<span class="badge">📄 No Manual</span>`}
-              ${normalizeBatch(item.batch) ? batch : ""}
-            </div>
-            ${item.notes ? `<div class="small">${escapeHtml(item.notes)}</div>` : ""}
-          </div>
-        </div>
-      </td>
-
-      <td class="mono">
-        <div>${escapeHtml(item.purchaseDate || "—")}</div>
-        <div class="small">Buy: ${money(toNum(item.purchaseCost))}</div>
-      </td>
-
-      <td class="mono">
-        <div>${escapeHtml(item.soldDate || "—")}</div>
-        <div class="small">Price: ${money(toNum(item.soldPrice))}</div>
-      </td>
-
-      <td class="mono">${money(base.directCost)}</td>
-      <td class="mono">${money(base.revenue)}</td>
-
-      <td class="mono" style="font-weight:900;color:${net.profitNet >= 0 ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)"};">
-        ${money(net.profitNet)}
-      </td>
-
-      <td class="mono">${base.directCost > 0 ? `${((net.profitNet / base.directCost) * 100).toFixed(1)}%` : "0.0%"}</td>
-
-      <td>
-        <div style="display:flex;flex-direction:column;gap:4px;">
-          <div>${escapeHtml(item.soldOn || "—")}</div>
-          <div class="small">${escapeHtml(item.sellPayment || "")}</div>
-        </div>
-      </td>
-
-      <td>${cond}</td>
-      <td>${batch}</td>
-
-      <td>
-        <div class="rowActions">
-          <button class="iconBtn" data-edit="${item.id}" title="Edit">✏️</button>
-          <button class="iconBtn" data-del="${item.id}" title="Delete">🗑️</button>
-        </div>
-      </td>
-    `;
-
-    tbody.appendChild(tr);
-  }
 }
 
-function renderExpensesTable(expenses) {
-  const tb = $("#expenseTbody");
-  if (!tb) return;
-  tb.innerHTML = "";
-
-  const sorted = [...expenses].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-
-  for (const e of sorted) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td class="mono">${escapeHtml(e.date || "—")}</td>
-      <td>${escapeHtml(e.category || "")}</td>
-      <td>${escapeHtml(e.note || "")}</td>
-      <td class="mono">${money(toNum(e.amount))}</td>
-      <td>
-        <div class="rowActions">
-          <button class="iconBtn" data-exp-del="${e.id}" title="Delete">🗑️</button>
-        </div>
-      </td>
-    `;
-    tb.appendChild(tr);
-  }
-}
-
-/**
- * Expense card: show totals by CATEGORY only (no net profit, no total)
- * If you added <div id="expenseSummary"></div> in index.html, it will render.
- */
-function renderExpenseSummary(expenses) {
+function renderExpenseSummary() {
   const el = $("#expenseSummary");
   if (!el) return;
 
@@ -545,8 +426,8 @@ function renderExpenseSummary(expenses) {
     const cat = (e.category || "Other").trim() || "Other";
     sums[cat] = (sums[cat] || 0) + toNum(e.amount);
   }
-
   const entries = Object.entries(sums).sort((a, b) => b[1] - a[1]);
+
   if (!entries.length) {
     el.innerHTML = `<div class="small">No expenses yet.</div>`;
     return;
@@ -557,35 +438,48 @@ function renderExpenseSummary(expenses) {
     .join("");
 }
 
-/**
- * KPIs:
- * Revenue, Purchase Cost, Material Cost, Shipping Cost, Other Cost, Profit
- * Profit = revenue - (purchase + material + shipping + other)
- * Expenses are bucketed into material/shipping/other.
- *
- * IMPORTANT:
- * These IDs must exist in index.html:
- * - kpiRevenue, kpiPurchase, kpiMaterial, kpiShipping, kpiOther, kpiProfit
- *
- * If you haven't updated index.html yet, this won't show correctly.
- */
-function renderKPIs(flipsList, allocator) {
+function renderExpensesTable() {
+  const tb = $("#expenseTbody");
+  if (!tb) return;
+  tb.innerHTML = "";
+
+  const sorted = [...expenses].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  for (const e of sorted) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="mono">${escapeHtml(e.date || "—")}</td>
+      <td>${escapeHtml(e.category || "")}</td>
+      <td>${escapeHtml(e.note || "")}</td>
+      <td class="mono">${money(toNum(e.amount))}</td>
+      <td><div class="rowActions"><button class="iconBtn" data-exp-del="${e.id}" title="Delete">🗑️</button></div></td>
+    `;
+    tb.appendChild(tr);
+  }
+}
+
+function renderKPIs(allocator) {
+  // Only SOLD items / sales create revenue.
   let revenue = 0;
   let purchaseCost = 0;
   let materialCost = 0;
   let shippingCost = 0;
   let otherCost = 0;
 
-  // Per-flip direct amounts
-  for (const item of flipsList) {
-    const base = calcFlip(item);
-    revenue += base.revenue;
-    purchaseCost += base.purchase;
-    materialCost += base.material;
-    shippingCost += base.shipping;
+  for (const s of sales) {
+    const inv = inventory.find(i => i.id === s.inventoryId);
+    if (!inv) continue;
 
-    // allocated expenses per sold flip -> bucketed
-    const alloc = allocator.allocatedExpenseForFlip(item);
+    const r = toNum(s.soldPrice);
+    const p = toNum(inv.purchaseCost);
+    const m = toNum(inv.materialCost);
+    const sh = toNum(s.fees);
+
+    revenue += r;
+    purchaseCost += p;
+    materialCost += m;
+    shippingCost += sh;
+
+    const alloc = allocator.allocatedExpenseForSale(s);
     materialCost += alloc.material;
     shippingCost += alloc.shipping;
     otherCost += alloc.other;
@@ -593,85 +487,153 @@ function renderKPIs(flipsList, allocator) {
 
   const profit = revenue - purchaseCost - materialCost - shippingCost - otherCost;
 
-  // New KPIs
   $("#kpiRevenue") && ($("#kpiRevenue").textContent = money(revenue));
   $("#kpiPurchase") && ($("#kpiPurchase").textContent = money(purchaseCost));
   $("#kpiMaterial") && ($("#kpiMaterial").textContent = money(materialCost));
   $("#kpiShipping") && ($("#kpiShipping").textContent = money(shippingCost));
   $("#kpiOther") && ($("#kpiOther").textContent = money(otherCost));
   $("#kpiProfit") && ($("#kpiProfit").textContent = money(profit));
-
-  // Backward-compat: if old elements exist, try not to lie.
-  // We blank ROI/costs if present to avoid confusion.
-  $("#kpiCosts") && ($("#kpiCosts").textContent = "—");
-  $("#kpiROI") && ($("#kpiROI").textContent = "—");
-  $("#kpiExpenses") && ($("#kpiExpenses").textContent = "—");
-  $("#kpiNetProfit") && ($("#kpiNetProfit").textContent = "—");
 }
 
-function updateBatchUIFromAllFlips(flips) {
-  const batches = [...new Set(flips.map(f => normalizeBatch(f.batch)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+function renderInventoryTable(viewList, allocator) {
+  const tb = $("#invTbody");
+  if (!tb) return;
+  tb.innerHTML = "";
 
-  const dl = $("#batchList");
-  if (dl) dl.innerHTML = batches.map(b => `<option value="${escapeHtml(b)}"></option>`).join("");
+  const sorted = [...viewList].sort((a, b) => {
+    const ad = a.purchaseDate || "0000-00-00";
+    const bd = b.purchaseDate || "0000-00-00";
+    if (ad !== bd) return bd.localeCompare(ad);
+    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  });
 
-  const bf = $("#batchFilter");
-  if (bf) {
-    const current = bf.value || "all";
-    bf.innerHTML = [
-      `<option value="all">All Batches</option>`,
-      ...batches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)
-    ].join("");
-    if ([...bf.options].some(o => o.value === current)) bf.value = current;
-    else bf.value = "all";
+  for (const inv of sorted) {
+    const sold = isSoldItem(inv);
+    const sale = getSaleByInventoryId(inv.id);
+
+    const statusBadge = sold
+      ? `<span class="badge sold">✅ Sold</span>`
+      : `<span class="badge unsold">🕒 In Stock</span>`;
+
+    const cond = conditionBadge(inv.condition);
+    const batch = batchBadge(inv.batch);
+
+    const itemTitle = `${inv.name || "(unnamed)"}${inv.setNumber ? ` • #${inv.setNumber}` : ""}`;
+
+    let revenue = 0;
+    let profit = 0;
+    let soldOn = "—";
+
+    if (sold && sale) {
+      const net = calcSaleNet(inv, sale, allocator);
+      revenue = net?.revenue || 0;
+      profit = net?.profitNet || 0;
+      soldOn = sale.soldOn || "—";
+    }
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>
+        <div style="display:flex;gap:10px;align-items:flex-start;">
+          ${renderItemThumbHTML(inv.setImageUrl)}
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <div style="font-weight:900;">${escapeHtml(itemTitle)}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              ${statusBadge}
+              ${cond}
+              ${inv.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(inv.boughtFrom)}</span>` : ""}
+              ${inv.buyPayment ? `<span class="badge">💳 ${escapeHtml(inv.buyPayment)}</span>` : ""}
+              ${inv.boxIncluded === "yes" ? `<span class="badge">📦 Box</span>` : `<span class="badge">📭 No Box</span>`}
+              ${inv.manualIncluded === "yes" ? `<span class="badge">📘 Manual</span>` : `<span class="badge">📄 No Manual</span>`}
+              ${normalizeBatch(inv.batch) ? batch : ""}
+            </div>
+          </div>
+        </div>
+      </td>
+
+      <td class="mono">
+        <div>${escapeHtml(inv.purchaseDate || "—")}</div>
+        <div class="small">Buy: ${money(toNum(inv.purchaseCost))}</div>
+      </td>
+
+      <td class="mono">
+        <div>${escapeHtml(sale?.soldDate || "—")}</div>
+        <div class="small">${sold ? `Fees: ${money(toNum(sale?.fees))}` : ""}</div>
+      </td>
+
+      <td class="mono">${sold ? money(revenue) : "—"}</td>
+
+      <td class="mono" style="font-weight:900;color:${profit >= 0 ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)"};">
+        ${sold ? money(profit) : "—"}
+      </td>
+
+      <td>${escapeHtml(soldOn)}</td>
+      <td>${cond}</td>
+      <td>${batch}</td>
+
+      <td>
+        <div class="rowActions">
+          <button class="iconBtn" data-inv-edit="${inv.id}" title="Edit">✏️</button>
+          <button class="iconBtn" data-inv-del="${inv.id}" title="Delete">🗑️</button>
+          ${sold ? `<button class="iconBtn" data-sale-del="${inv.id}" title="Delete Sale">↩️</button>` : ""}
+        </div>
+      </td>
+    `;
+    tb.appendChild(tr);
   }
 }
 
-function renderCharts(flipsList, allocator) {
+/** ---------- Charts (profit AFTER expenses) ---------- */
+function renderCharts(allocator) {
   if (!window.Chart) return;
 
-  // ---- Profit over time (profit AFTER expenses, month-by-month) ----
+  // Profit over time (by sold month)
   const profitByMonth = new Map();
-  for (const item of flipsList) {
-    const key = ym(item.soldDate);
+  for (const s of sales) {
+    const key = ym(s.soldDate);
     if (!key) continue;
-    const { profitNet } = calcNet(item, allocator);
-    profitByMonth.set(key, (profitByMonth.get(key) || 0) + profitNet);
+    const inv = inventory.find(i => i.id === s.inventoryId);
+    if (!inv) continue;
+    const net = calcSaleNet(inv, s, allocator);
+    profitByMonth.set(key, (profitByMonth.get(key) || 0) + (net?.profitNet || 0));
   }
   const months = [...profitByMonth.keys()].sort();
   const profitVals = months.map(m => profitByMonth.get(m) || 0);
 
-  // ---- Profit by marketplace (sold only) AFTER expenses allocation ----
+  // Profit by marketplace
   const profitByMarket = new Map();
-  for (const item of flipsList) {
-    if (!isSold(item)) continue;
-    const market = (item.soldOn || "").trim() || "Unknown";
-    const { profitNet } = calcNet(item, allocator);
-    profitByMarket.set(market, (profitByMarket.get(market) || 0) + profitNet);
+  for (const s of sales) {
+    const inv = inventory.find(i => i.id === s.inventoryId);
+    if (!inv) continue;
+    const key = (s.soldOn || "").trim() || "Unknown";
+    const net = calcSaleNet(inv, s, allocator);
+    profitByMarket.set(key, (profitByMarket.get(key) || 0) + (net?.profitNet || 0));
   }
   const markets = [...profitByMarket.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   const marketLabels = markets.map(([k]) => k);
   const marketVals = markets.map(([, v]) => v);
 
-  // ---- Profit by condition (sold only) AFTER expenses allocation ----
+  // Profit by condition
   const profitByCond = new Map();
-  for (const item of flipsList) {
-    if (!isSold(item)) continue;
-    const c = normalizeCondition(item.condition);
-    const { profitNet } = calcNet(item, allocator);
-    profitByCond.set(c, (profitByCond.get(c) || 0) + profitNet);
+  for (const s of sales) {
+    const inv = inventory.find(i => i.id === s.inventoryId);
+    if (!inv) continue;
+    const c = normalizeCondition(inv.condition);
+    const net = calcSaleNet(inv, s, allocator);
+    profitByCond.set(c, (profitByCond.get(c) || 0) + (net?.profitNet || 0));
   }
   const condOrder = ["new_sealed", "new_openbox", "used_complete", "used_incomplete"];
   const condLabels = condOrder.map(k => CONDITION_LABELS[k]);
   const condVals = condOrder.map(k => profitByCond.get(k) || 0);
 
-  // ---- Profit by batch (sold only) AFTER expenses allocation ----
+  // Profit by batch
   const profitByBatch = new Map();
-  for (const item of flipsList) {
-    if (!isSold(item)) continue;
-    const b = normalizeBatch(item.batch) || "No Batch";
-    const { profitNet } = calcNet(item, allocator);
-    profitByBatch.set(b, (profitByBatch.get(b) || 0) + profitNet);
+  for (const s of sales) {
+    const inv = inventory.find(i => i.id === s.inventoryId);
+    if (!inv) continue;
+    const b = normalizeBatch(inv.batch) || "No Batch";
+    const net = calcSaleNet(inv, s, allocator);
+    profitByBatch.set(b, (profitByBatch.get(b) || 0) + (net?.profitNet || 0));
   }
   const batchesTop = [...profitByBatch.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   const batchLabels = batchesTop.map(([k]) => k);
@@ -679,12 +641,12 @@ function renderCharts(flipsList, allocator) {
 
   const common = { color: "#e5edff", grid: "rgba(255,255,255,0.08)" };
 
-  // Line
+  // Line chart
   const lineEl = $("#profitLine");
   if (lineEl) {
-    const lineCtx = lineEl.getContext("2d");
+    const ctx = lineEl.getContext("2d");
     if (profitLineChart) profitLineChart.destroy();
-    profitLineChart = new Chart(lineCtx, {
+    profitLineChart = new Chart(ctx, {
       type: "line",
       data: {
         labels: months.length ? months : ["—"],
@@ -702,7 +664,7 @@ function renderCharts(flipsList, allocator) {
         responsive: true,
         plugins: {
           legend: { labels: { color: common.color } },
-          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+          tooltip: { callbacks: { label: (c) => ` ${money(c.parsed.y)}` } }
         },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
@@ -715,16 +677,16 @@ function renderCharts(flipsList, allocator) {
   // Market bar
   const marketEl = $("#marketBar");
   if (marketEl) {
-    const barCtx = marketEl.getContext("2d");
+    const ctx = marketEl.getContext("2d");
     if (marketBarChart) marketBarChart.destroy();
-    marketBarChart = new Chart(barCtx, {
+    marketBarChart = new Chart(ctx, {
       type: "bar",
       data: {
         labels: marketLabels.length ? marketLabels : ["—"],
         datasets: [{
           label: "Profit",
           data: marketLabels.length ? marketVals : [0],
-          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)",
+          backgroundColor: (c) => (c.raw ?? 0) >= 0 ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)",
           borderColor: "rgba(255,255,255,0.18)",
           borderWidth: 1
         }]
@@ -733,7 +695,7 @@ function renderCharts(flipsList, allocator) {
         responsive: true,
         plugins: {
           legend: { labels: { color: common.color } },
-          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+          tooltip: { callbacks: { label: (c) => ` ${money(c.parsed.y)}` } }
         },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
@@ -746,16 +708,16 @@ function renderCharts(flipsList, allocator) {
   // Condition bar
   const condEl = $("#conditionBar");
   if (condEl) {
-    const condCtx = condEl.getContext("2d");
+    const ctx = condEl.getContext("2d");
     if (conditionBarChart) conditionBarChart.destroy();
-    conditionBarChart = new Chart(condCtx, {
+    conditionBarChart = new Chart(ctx, {
       type: "bar",
       data: {
         labels: condLabels,
         datasets: [{
           label: "Profit",
           data: condVals,
-          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(59,130,246,0.45)" : "rgba(239,68,68,0.55)",
+          backgroundColor: (c) => (c.raw ?? 0) >= 0 ? "rgba(59,130,246,0.45)" : "rgba(239,68,68,0.55)",
           borderColor: "rgba(255,255,255,0.18)",
           borderWidth: 1
         }]
@@ -764,7 +726,7 @@ function renderCharts(flipsList, allocator) {
         responsive: true,
         plugins: {
           legend: { labels: { color: common.color } },
-          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+          tooltip: { callbacks: { label: (c) => ` ${money(c.parsed.y)}` } }
         },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
@@ -777,16 +739,16 @@ function renderCharts(flipsList, allocator) {
   // Batch bar
   const batchEl = $("#batchBar");
   if (batchEl) {
-    const batchCtx = batchEl.getContext("2d");
+    const ctx = batchEl.getContext("2d");
     if (batchBarChart) batchBarChart.destroy();
-    batchBarChart = new Chart(batchCtx, {
+    batchBarChart = new Chart(ctx, {
       type: "bar",
       data: {
         labels: batchLabels.length ? batchLabels : ["—"],
         datasets: [{
           label: "Profit",
           data: batchLabels.length ? batchVals : [0],
-          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(168,85,247,0.45)" : "rgba(239,68,68,0.55)",
+          backgroundColor: (c) => (c.raw ?? 0) >= 0 ? "rgba(168,85,247,0.45)" : "rgba(239,68,68,0.55)",
           borderColor: "rgba(255,255,255,0.18)",
           borderWidth: 1
         }]
@@ -795,7 +757,7 @@ function renderCharts(flipsList, allocator) {
         responsive: true,
         plugins: {
           legend: { labels: { color: common.color } },
-          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+          tooltip: { callbacks: { label: (c) => ` ${money(c.parsed.y)}` } }
         },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
@@ -806,134 +768,187 @@ function renderCharts(flipsList, allocator) {
   }
 }
 
-/** ---------- Filters ---------- */
-function getFiltered() {
-  const q = ($("#searchInput")?.value || "").trim().toLowerCase();
-  const status = $("#statusFilter")?.value || "all";
-  const condFilter = $("#conditionFilter")?.value || "all";
-  const batchFilter = $("#batchFilter")?.value || "all";
-
-  return allFlips.filter(item => {
-    const sold = isSold(item);
-
-    if (status === "sold" && !sold) return false;
-    if (status === "unsold" && sold) return false;
-
-    const itemCond = normalizeCondition(item.condition);
-    if (condFilter !== "all" && itemCond !== condFilter) return false;
-
-    const b = normalizeBatch(item.batch);
-    if (batchFilter !== "all" && b !== batchFilter) return false;
-
-    if (!q) return true;
-    const hay = [
-      item.name, item.setNumber, item.boughtFrom, item.soldOn,
-      item.buyPayment, item.sellPayment, item.notes,
-      CONDITION_LABELS[itemCond] || "",
-      item.batch || ""
-    ].join(" ").toLowerCase();
-
-    return hay.includes(q);
-  });
-}
-
+/** ---------- Rerender ---------- */
 function rerender() {
-  const flipsView = getFiltered();
-  const allocator = buildExpenseAllocator(allFlips, allExpenses);
+  const allocator = buildExpenseAllocator(sales, expenses);
 
-  renderTable(flipsView, allocator);
-  renderKPIs(flipsView, allocator);
-  renderCharts(flipsView, allocator);
+  updateBatchFilter();
+  updateInventoryDatalist();
 
-  renderExpenseSummary(allExpenses);
+  renderKPIs(allocator);
+  renderCharts(allocator);
+
+  renderExpensesTable();
+  renderExpenseSummary();
+
+  const view = getFilteredInventoryView();
+  renderInventoryTable(view, allocator);
 }
 
-/** ---------- Form actions ---------- */
-function setPreview(url) {
-  const img = $("#setPhotoPreview");
-  if (!img) return;
-  const u = (url || "").trim();
-  if (!u) {
-    img.removeAttribute("src");
-    img.style.display = "none";
-    return;
-  }
-  img.src = u;
-  img.style.display = "block";
-}
-
-function setForm(item) {
-  const f = $("#flipForm");
+/** ---------- Inventory form ---------- */
+function setInvFormDefaults() {
+  const f = $("#invForm");
   if (!f) return;
 
-  f.id.value = item?.id || "";
-  f.name.value = item?.name || "";
-  f.setNumber.value = item?.setNumber || "";
-  f.setImageUrl.value = item?.setImageUrl || "";
-  setPreview(item?.setImageUrl || "");
+  // keep batch as user typed; default date to today if empty
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  if (!f.purchaseDate.value) f.purchaseDate.value = `${yyyy}-${mm}-${dd}`;
 
-  f.purchaseDate.value = item?.purchaseDate || "";
-  f.soldDate.value = item?.soldDate || "";
-  f.condition.value = normalizeCondition(item?.condition || "new_sealed");
-  f.batch.value = item?.batch || "";
-  f.purchaseCost.value = item?.purchaseCost ?? "";
-  f.materialCost.value = item?.materialCost ?? 0;
-  f.soldPrice.value = item?.soldPrice ?? 0;
-  f.fees.value = item?.fees ?? 0;
-  f.boughtFrom.value = item?.boughtFrom || "";
-  f.soldOn.value = item?.soldOn || "";
-  f.buyPayment.value = item?.buyPayment || "";
-  f.sellPayment.value = item?.sellPayment || "";
-  f.notes.value = item?.notes || "";
-  f.boxIncluded.value = item?.boxIncluded || "yes";
-  f.manualIncluded.value = item?.manualIncluded || "yes";
+  // preview hidden until lookup
+  renderThumb("", "#invPhotoPreview");
 }
 
-function resetForm() {
-  setForm(null);
-  $("#saveBtn") && ($("#saveBtn").textContent = "Save Flip");
+function clearInvForm(keepBatch = true) {
+  const f = $("#invForm");
+  if (!f) return;
+  const batch = f.batch.value;
+  f.reset();
+  if (keepBatch) f.batch.value = batch;
+  setInvFormDefaults();
 }
 
-async function saveForm(ev) {
+async function handleInvLookup() {
+  const f = $("#invForm");
+  if (!f) return;
+  const setNum = f.setNumber.value;
+  const res = await rebrickableLookup(setNum);
+  if (!res) return;
+
+  if (res.name) f.name.value = res.name;
+  if (res.img) {
+    f.setImageUrl.value = res.img;
+    renderThumb(res.img, "#invPhotoPreview");
+  }
+  toast("Set info filled ✅");
+}
+
+async function addInventoryFromForm(ev) {
   ev.preventDefault();
-  const fd = new FormData(ev.target);
-  const item = normalizeFormData(fd);
+  const f = ev.target;
+  const fd = new FormData(f);
+  const obj = Object.fromEntries(fd.entries());
+
+  const item = {
+    id: uid(),
+    name: (obj.name || "").trim(),
+    setNumber: (obj.setNumber || "").trim(),
+    setImageUrl: (obj.setImageUrl || "").trim(),
+    purchaseDate: obj.purchaseDate || "",
+    purchaseCost: toNum(obj.purchaseCost),
+    materialCost: toNum(obj.materialCost),
+    condition: normalizeCondition(obj.condition),
+    batch: normalizeBatch(obj.batch),
+    boughtFrom: (obj.boughtFrom || "").trim(),
+    buyPayment: (obj.buyPayment || "").trim(),
+    boxIncluded: (obj.boxIncluded || "yes"),
+    manualIncluded: (obj.manualIncluded || "yes"),
+    status: "in_stock",
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
 
   if (!item.name) return toast("Name is required.");
   if (!item.purchaseDate) return toast("Purchase date is required.");
+  if (!item.purchaseCost || item.purchaseCost <= 0) return toast("Purchase cost required.");
 
-  await txPut(item);
-  toast("Saved ✅");
+  await txPut(INVENTORY_STORE, item);
+  inventory = await txGetAll(INVENTORY_STORE);
 
-  allFlips = await txReadAll();
-  updateBatchUIFromAllFlips(allFlips);
-  resetForm();
+  toast("Added to inventory ✅");
+  clearInvForm(true);
   rerender();
 }
 
-async function handleTableClick(ev) {
-  const editId = ev.target?.getAttribute?.("data-edit");
-  const delId = ev.target?.getAttribute?.("data-del");
+/** ---------- Sale form ---------- */
+function setSaleFormDefaults() {
+  const f = $("#saleForm");
+  if (!f) return;
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  if (!f.soldDate.value) f.soldDate.value = `${yyyy}-${mm}-${dd}`;
+  renderThumb("", "#salePhotoPreview");
+}
 
-  if (editId) {
-    const item = allFlips.find(x => x.id === editId);
-    if (!item) return;
-    setForm(item);
-    $("#saveBtn") && ($("#saveBtn").textContent = "Update Flip");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+function clearSaleForm() {
+  const f = $("#saleForm");
+  if (!f) return;
+  f.reset();
+  f.inventoryId.value = "";
+  setSaleFormDefaults();
+}
+
+function setSaleSelection(invId) {
+  const f = $("#saleForm");
+  if (!f) return;
+
+  const inv = inventory.find(i => i.id === invId);
+  if (!inv) {
+    f.inventoryId.value = "";
+    renderThumb("", "#salePhotoPreview");
+    return;
   }
 
-  if (delId) {
-    const item = allFlips.find(x => x.id === delId);
-    if (!item) return;
-    const ok = confirm(`Delete "${item.name}"? This cannot be undone.`);
-    if (!ok) return;
-    await txDelete(delId);
-    toast("Deleted 🗑️");
-    allFlips = await txReadAll();
-    updateBatchUIFromAllFlips(allFlips);
-    rerender();
-  }
+  // store selected id
+  f.inventoryId.value = inv.id;
+
+  // show preview
+  renderThumb(inv.setImageUrl || "", "#salePhotoPreview");
+}
+
+async function saveSaleFromForm(ev) {
+  ev.preventDefault();
+  const f = ev.target;
+  const fd = new FormData(f);
+  const obj = Object.fromEntries(fd.entries());
+
+  const invId = (obj.inventoryId || "").trim();
+  if (!invId) return toast("Select an inventory item first.");
+
+  const inv = inventory.find(i => i.id === invId);
+  if (!inv) return toast("Selected item not found.");
+
+  if (inv.status === "sold") return toast("That item is already sold.");
+
+  const soldDate = obj.soldDate || "";
+  const soldPrice = toNum(obj.soldPrice);
+  const fees = toNum(obj.fees);
+
+  if (!soldDate) return toast("Sold date required.");
+  if (!soldPrice || soldPrice <= 0) return toast("Sold price required.");
+
+  const sale = {
+    id: uid(),
+    inventoryId: invId,
+    soldDate,
+    soldPrice,
+    fees,
+    soldOn: (obj.soldOn || "").trim(),
+    sellPayment: (obj.sellPayment || "").trim(),
+    notes: (obj.notes || "").trim(),
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+
+  // write sale
+  await txPut(SALES_STORE, sale);
+
+  // mark inventory as sold
+  inv.status = "sold";
+  inv.updatedAt = Date.now();
+  await txPut(INVENTORY_STORE, inv);
+
+  // reload
+  inventory = await txGetAll(INVENTORY_STORE);
+  sales = await txGetAll(SALES_STORE);
+
+  toast("Sale saved ✅");
+  clearSaleForm();
+  rerender();
 }
 
 /** ---------- Expenses actions ---------- */
@@ -955,13 +970,11 @@ async function addExpenseFromForm(ev) {
   if (!exp.date) return toast("Expense date required.");
   if (!exp.category) return toast("Category required.");
 
-  await txPutExpense(exp);
-  allExpenses = await txReadAllExpenses();
-  renderExpensesTable(allExpenses);
-  rerender();
-  ev.target.reset();
+  await txPut(EXPENSES_STORE, exp);
+  expenses = await txGetAll(EXPENSES_STORE);
 
-  // set default date again (quality of life)
+  ev.target.reset();
+  // default date again
   const d = $("#expenseForm")?.querySelector('input[name="date"]');
   if (d) {
     const today = new Date();
@@ -972,43 +985,142 @@ async function addExpenseFromForm(ev) {
   }
 
   toast("Expense added ✅");
+  rerender();
 }
 
 async function handleExpensesTableClick(ev) {
   const id = ev.target?.getAttribute?.("data-exp-del");
   if (!id) return;
-  await txDeleteExpense(id);
-  allExpenses = await txReadAllExpenses();
-  renderExpensesTable(allExpenses);
-  rerender();
+  await txDelete(EXPENSES_STORE, id);
+  expenses = await txGetAll(EXPENSES_STORE);
   toast("Expense deleted 🗑️");
+  rerender();
 }
 
 async function clearExpenses() {
   const ok = confirm("Clear all expenses? This cannot be undone.");
   if (!ok) return;
-  await txClearExpenses();
-  allExpenses = await txReadAllExpenses();
-  renderExpensesTable(allExpenses);
-  rerender();
+  await txClear(EXPENSES_STORE);
+  expenses = await txGetAll(EXPENSES_STORE);
   toast("Expenses cleared 🗑️");
+  rerender();
+}
+
+/** ---------- Inventory table actions (edit/delete/undo sale) ---------- */
+function fillInvFormForEdit(invId) {
+  const inv = inventory.find(i => i.id === invId);
+  if (!inv) return;
+
+  const f = $("#invForm");
+  if (!f) return;
+
+  // We keep it simple: editing overwrites by deleting + re-adding with same id
+  // We'll store edit id in a dataset on the form.
+  f.dataset.editId = inv.id;
+
+  f.batch.value = inv.batch || "";
+  f.purchaseDate.value = inv.purchaseDate || "";
+  f.boughtFrom.value = inv.boughtFrom || "";
+  f.buyPayment.value = inv.buyPayment || "";
+  f.condition.value = normalizeCondition(inv.condition);
+  f.materialCost.value = toNum(inv.materialCost);
+  f.boxIncluded.value = inv.boxIncluded || "yes";
+  f.manualIncluded.value = inv.manualIncluded || "yes";
+  f.setNumber.value = inv.setNumber || "";
+  f.name.value = inv.name || "";
+  f.purchaseCost.value = toNum(inv.purchaseCost);
+  f.setImageUrl.value = inv.setImageUrl || "";
+  renderThumb(inv.setImageUrl || "", "#invPhotoPreview");
+
+  toast("Editing inventory item ✏️");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function saveInvEditIfNeeded(newItem) {
+  const f = $("#invForm");
+  const editId = f?.dataset?.editId || "";
+  if (!editId) return false;
+
+  const old = inventory.find(i => i.id === editId);
+  if (!old) {
+    delete f.dataset.editId;
+    return false;
+  }
+
+  // preserve status
+  newItem.id = editId;
+  newItem.status = old.status || "in_stock";
+  newItem.createdAt = old.createdAt || Date.now();
+  newItem.updatedAt = Date.now();
+
+  await txPut(INVENTORY_STORE, newItem);
+  delete f.dataset.editId;
+  return true;
+}
+
+async function handleInventoryTableClick(ev) {
+  const invEditId = ev.target?.getAttribute?.("data-inv-edit");
+  const invDelId = ev.target?.getAttribute?.("data-inv-del");
+  const saleDelForInv = ev.target?.getAttribute?.("data-sale-del");
+
+  if (invEditId) {
+    fillInvFormForEdit(invEditId);
+    return;
+  }
+
+  if (invDelId) {
+    const inv = inventory.find(i => i.id === invDelId);
+    if (!inv) return;
+    const ok = confirm(`Delete "${inv.name}"? This will also delete its sale if sold.`);
+    if (!ok) return;
+
+    // delete sale if exists
+    const sale = getSaleByInventoryId(invDelId);
+    if (sale) await txDelete(SALES_STORE, sale.id);
+
+    await txDelete(INVENTORY_STORE, invDelId);
+
+    inventory = await txGetAll(INVENTORY_STORE);
+    sales = await txGetAll(SALES_STORE);
+    toast("Deleted 🗑️");
+    rerender();
+    return;
+  }
+
+  if (saleDelForInv) {
+    // Undo sale: delete sale record + mark inventory as in_stock
+    const inv = inventory.find(i => i.id === saleDelForInv);
+    const sale = getSaleByInventoryId(saleDelForInv);
+    if (!inv || !sale) return;
+
+    const ok = confirm(`Delete sale for "${inv.name}" and move back to In Stock?`);
+    if (!ok) return;
+
+    await txDelete(SALES_STORE, sale.id);
+    inv.status = "in_stock";
+    inv.updatedAt = Date.now();
+    await txPut(INVENTORY_STORE, inv);
+
+    inventory = await txGetAll(INVENTORY_STORE);
+    sales = await txGetAll(SALES_STORE);
+    toast("Sale removed ↩️");
+    rerender();
+  }
 }
 
 /** ---------- Export / Import ---------- */
 async function exportData() {
-  const flips = await txReadAll();
-  const expenses = await txReadAllExpenses();
-
   const payload = {
     exportedAt: new Date().toISOString(),
-    flips,
-    expenses
+    inventory: await txGetAll(INVENTORY_STORE),
+    sales: await txGetAll(SALES_STORE),
+    expenses: await txGetAll(EXPENSES_STORE)
   };
 
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `lego-flips-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `lego-tracker-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
   toast("Exported 📦");
@@ -1017,51 +1129,67 @@ async function exportData() {
 async function importData(file) {
   const text = await file.text();
   let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    toast("Invalid JSON file.");
+  try { parsed = JSON.parse(text); } catch { toast("Invalid JSON file."); return; }
+
+  const inv = parsed?.inventory;
+  const sal = parsed?.sales;
+  const exp = parsed?.expenses;
+
+  if (!Array.isArray(inv) && !Array.isArray(sal) && !Array.isArray(exp)) {
+    toast("No inventory/sales/expenses found in file.");
     return;
   }
 
-  const flips = Array.isArray(parsed) ? parsed : parsed.flips;
-  if (!Array.isArray(flips)) {
-    toast("No flips found in file.");
-    return;
+  // Import inventory
+  if (Array.isArray(inv)) {
+    for (const raw of inv) {
+      const item = {
+        id: raw.id || uid(),
+        name: (raw.name || "").trim(),
+        setNumber: (raw.setNumber || "").trim(),
+        setImageUrl: (raw.setImageUrl || "").trim(),
+        purchaseDate: raw.purchaseDate || "",
+        purchaseCost: toNum(raw.purchaseCost),
+        materialCost: toNum(raw.materialCost),
+        condition: normalizeCondition(raw.condition),
+        batch: normalizeBatch(raw.batch),
+        boughtFrom: (raw.boughtFrom || "").trim(),
+        buyPayment: (raw.buyPayment || "").trim(),
+        boxIncluded: (raw.boxIncluded || "yes"),
+        manualIncluded: (raw.manualIncluded || "yes"),
+        status: (raw.status === "sold") ? "sold" : "in_stock",
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      if (!item.name || !item.purchaseDate) continue;
+      await txPut(INVENTORY_STORE, item);
+    }
   }
 
-  for (const raw of flips) {
-    const item = {
-      id: raw.id || uid(),
-      name: (raw.name || "").trim(),
-      setNumber: (raw.setNumber || "").trim(),
-      setImageUrl: (raw.setImageUrl || "").trim(),
-      purchaseDate: raw.purchaseDate || "",
-      soldDate: raw.soldDate || "",
-      condition: normalizeCondition(raw.condition),
-      batch: normalizeBatch(raw.batch),
-      purchaseCost: toNum(raw.purchaseCost),
-      materialCost: toNum(raw.materialCost),
-      soldPrice: toNum(raw.soldPrice),
-      fees: toNum(raw.fees),
-      boughtFrom: (raw.boughtFrom || "").trim(),
-      soldOn: (raw.soldOn || "").trim(),
-      buyPayment: (raw.buyPayment || "").trim(),
-      sellPayment: (raw.sellPayment || "").trim(),
-      notes: (raw.notes || "").trim(),
-      updatedAt: Date.now(),
-      boxIncluded: (raw.boxIncluded || "yes"),
-      manualIncluded: (raw.manualIncluded || "yes")
-    };
-    if (!item.name || !item.purchaseDate) continue;
-    await txPut(item);
+  // Import sales
+  if (Array.isArray(sal)) {
+    for (const raw of sal) {
+      const sale = {
+        id: raw.id || uid(),
+        inventoryId: (raw.inventoryId || "").trim(),
+        soldDate: raw.soldDate || "",
+        soldPrice: toNum(raw.soldPrice),
+        fees: toNum(raw.fees),
+        soldOn: (raw.soldOn || "").trim(),
+        sellPayment: (raw.sellPayment || "").trim(),
+        notes: (raw.notes || "").trim(),
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      if (!sale.inventoryId || !sale.soldDate || sale.soldPrice <= 0) continue;
+      await txPut(SALES_STORE, sale);
+    }
   }
 
-  // Expenses import (optional/backward compatible)
-  const expenses = parsed?.expenses;
-  if (Array.isArray(expenses)) {
-    for (const raw of expenses) {
-      const exp = {
+  // Import expenses
+  if (Array.isArray(exp)) {
+    for (const raw of exp) {
+      const e = {
         id: raw.id || uid(),
         amount: toNum(raw.amount),
         category: (raw.category || "").trim() || "Other",
@@ -1069,25 +1197,34 @@ async function importData(file) {
         note: (raw.note || "").trim(),
         createdAt: Date.now()
       };
-      if (!exp.amount || exp.amount <= 0) continue;
-      if (!exp.date) continue;
-      await txPutExpense(exp);
+      if (!e.date || e.amount <= 0) continue;
+      await txPut(EXPENSES_STORE, e);
     }
   }
 
-  allFlips = await txReadAll();
-  updateBatchUIFromAllFlips(allFlips);
+  inventory = await txGetAll(INVENTORY_STORE);
+  sales = await txGetAll(SALES_STORE);
+  expenses = await txGetAll(EXPENSES_STORE);
 
-  allExpenses = await txReadAllExpenses();
-  renderExpensesTable(allExpenses);
+  // Ensure sold inventory matches sales existence
+  const soldIds = new Set(sales.map(s => s.inventoryId));
+  for (const i of inventory) {
+    const shouldSold = soldIds.has(i.id);
+    const newStatus = shouldSold ? "sold" : "in_stock";
+    if (i.status !== newStatus) {
+      i.status = newStatus;
+      i.updatedAt = Date.now();
+      await txPut(INVENTORY_STORE, i);
+    }
+  }
+  inventory = await txGetAll(INVENTORY_STORE);
 
-  rerender();
   toast("Imported ✅");
+  rerender();
 }
 
 /** ---------- Install (PWA) ---------- */
 let deferredPrompt = null;
-
 function setupInstallFlow() {
   const installBtn = $("#installBtn");
   const hint = $("#installHint");
@@ -1112,29 +1249,92 @@ function setupInstallFlow() {
 /** ---------- Service worker ---------- */
 async function registerSW() {
   if (!("serviceWorker" in navigator)) return;
-  try {
-    await navigator.serviceWorker.register("./sw.js");
-  } catch (e) {
-    console.warn("SW registration failed:", e);
+  try { await navigator.serviceWorker.register("./sw.js"); }
+  catch (e) { console.warn("SW registration failed:", e); }
+}
+
+/** ---------- Legacy migration (optional) ---------- */
+async function migrateOldFlipsIfAny() {
+  // If user had old app data in store "flips", migrate into inventory + sales once.
+  const hasOld = await storeExists(OLD_FLIPS_STORE);
+  if (!hasOld) return;
+
+  const existingInv = await txGetAll(INVENTORY_STORE);
+  const existingSales = await txGetAll(SALES_STORE);
+  if (existingInv.length || existingSales.length) return; // already using new model
+
+  // Read old flips
+  const db = await openDB();
+  const oldFlips = await new Promise((resolve) => {
+    try {
+      const tx = db.transaction(OLD_FLIPS_STORE, "readonly");
+      const store = tx.objectStore(OLD_FLIPS_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+      tx.oncomplete = () => db.close();
+    } catch {
+      db.close();
+      resolve([]);
+    }
+  });
+
+  if (!oldFlips.length) return;
+
+  for (const f of oldFlips) {
+    const inv = {
+      id: f.id || uid(),
+      name: (f.name || "").trim(),
+      setNumber: (f.setNumber || "").trim(),
+      setImageUrl: (f.setImageUrl || "").trim(),
+      purchaseDate: f.purchaseDate || "",
+      purchaseCost: toNum(f.purchaseCost),
+      materialCost: toNum(f.materialCost),
+      condition: normalizeCondition(f.condition),
+      batch: normalizeBatch(f.batch),
+      boughtFrom: (f.boughtFrom || "").trim(),
+      buyPayment: (f.buyPayment || "").trim(),
+      boxIncluded: (f.boxIncluded || "yes"),
+      manualIncluded: (f.manualIncluded || "yes"),
+      status: (f.soldDate && toNum(f.soldPrice) > 0) ? "sold" : "in_stock",
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    if (inv.name && inv.purchaseDate) await txPut(INVENTORY_STORE, inv);
+
+    if (inv.status === "sold") {
+      const sale = {
+        id: uid(),
+        inventoryId: inv.id,
+        soldDate: f.soldDate || "",
+        soldPrice: toNum(f.soldPrice),
+        fees: toNum(f.fees),
+        soldOn: (f.soldOn || "").trim(),
+        sellPayment: (f.sellPayment || "").trim(),
+        notes: (f.notes || "").trim(),
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      if (sale.soldDate && sale.soldPrice > 0) await txPut(SALES_STORE, sale);
+    }
   }
+
+  toast("Migrated old flips ✅");
 }
 
 /** ---------- Init ---------- */
 async function init() {
-  const form = $("#flipForm");
-  if (!form) return;
-
   // default dates
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, "0");
   const dd = String(today.getDate()).padStart(2, "0");
-  form.purchaseDate.value = `${yyyy}-${mm}-${dd}`;
 
-  const expDate = $("#expenseForm")?.querySelector('input[name="date"]');
-  if (expDate) expDate.value = `${yyyy}-${mm}-${dd}`;
+  $("#invForm")?.querySelector('input[name="purchaseDate"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
+  $("#saleForm")?.querySelector('input[name="soldDate"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
+  $("#expenseForm")?.querySelector('input[name="date"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
 
-  // Buttons
+  // buttons
   $("#apiKeyBtn")?.addEventListener("click", async () => {
     const current = getRBKey();
     const entered = prompt("Rebrickable API key (stored locally in your browser):", current);
@@ -1143,28 +1343,7 @@ async function init() {
     toast(getRBKey() ? "API key saved ✅" : "API key cleared");
   });
 
-  $("#lookupBtn")?.addEventListener("click", async () => {
-    const setNum = form.setNumber.value;
-    const res = await rebrickableLookup(setNum);
-    if (!res) return;
-
-    if (res.name) form.name.value = res.name;
-    if (res.img) {
-      form.setImageUrl.value = res.img;
-      setPreview(res.img);
-    }
-    toast("Set info filled ✅");
-  });
-
-  // Flip actions
-  form.addEventListener("submit", saveForm);
-  $("#resetBtn")?.addEventListener("click", resetForm);
-  $("#flipTbody")?.addEventListener("click", handleTableClick);
-
-  $("#searchInput")?.addEventListener("input", rerender);
-  $("#statusFilter")?.addEventListener("change", rerender);
-  $("#conditionFilter")?.addEventListener("change", rerender);
-  $("#batchFilter")?.addEventListener("change", rerender);
+  $("#invLookupBtn")?.addEventListener("click", handleInvLookup);
 
   $("#exportBtn")?.addEventListener("click", exportData);
   $("#importInput")?.addEventListener("change", async (e) => {
@@ -1174,38 +1353,105 @@ async function init() {
     e.target.value = "";
   });
 
-  // Expenses actions
+  // forms
+  $("#invForm")?.addEventListener("submit", async (ev) => {
+    // build item from form, but support edit mode
+    ev.preventDefault();
+    const f = ev.target;
+    const fd = new FormData(f);
+    const obj = Object.fromEntries(fd.entries());
+
+    const base = {
+      id: uid(),
+      name: (obj.name || "").trim(),
+      setNumber: (obj.setNumber || "").trim(),
+      setImageUrl: (obj.setImageUrl || "").trim(),
+      purchaseDate: obj.purchaseDate || "",
+      purchaseCost: toNum(obj.purchaseCost),
+      materialCost: toNum(obj.materialCost),
+      condition: normalizeCondition(obj.condition),
+      batch: normalizeBatch(obj.batch),
+      boughtFrom: (obj.boughtFrom || "").trim(),
+      buyPayment: (obj.buyPayment || "").trim(),
+      boxIncluded: (obj.boxIncluded || "yes"),
+      manualIncluded: (obj.manualIncluded || "yes"),
+      status: "in_stock",
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    if (!base.name) return toast("Name is required.");
+    if (!base.purchaseDate) return toast("Purchase date is required.");
+    if (!base.purchaseCost || base.purchaseCost <= 0) return toast("Purchase cost required.");
+
+    // if editing, overwrite existing with same id + preserve status
+    const didEdit = await saveInvEditIfNeeded(base);
+    if (!didEdit) await txPut(INVENTORY_STORE, base);
+
+    inventory = await txGetAll(INVENTORY_STORE);
+    toast(didEdit ? "Inventory updated ✅" : "Added to inventory ✅");
+    clearInvForm(true);
+    rerender();
+  });
+
+  $("#invResetBtn")?.addEventListener("click", () => {
+    const f = $("#invForm");
+    if (f?.dataset?.editId) delete f.dataset.editId;
+    clearInvForm(true);
+  });
+
+  $("#saleForm")?.addEventListener("submit", saveSaleFromForm);
+  $("#saleResetBtn")?.addEventListener("click", clearSaleForm);
+
+  // inventory pick behavior
+  $("#invPick")?.addEventListener("input", (e) => {
+    const id = resolveInventoryPickToId(e.target.value);
+    const f = $("#saleForm");
+    if (!f) return;
+    f.inventoryId.value = id || "";
+    setSaleSelection(id);
+  });
+
+  // filters
+  $("#searchInput")?.addEventListener("input", rerender);
+  $("#statusFilter")?.addEventListener("change", rerender);
+  $("#conditionFilter")?.addEventListener("change", rerender);
+  $("#batchFilter")?.addEventListener("change", rerender);
+
+  // expenses
   $("#expenseForm")?.addEventListener("submit", addExpenseFromForm);
   $("#expenseTbody")?.addEventListener("click", handleExpensesTableClick);
   $("#clearExpensesBtn")?.addEventListener("click", clearExpenses);
 
+  // table actions
+  $("#invTbody")?.addEventListener("click", handleInventoryTableClick);
+
   setupInstallFlow();
   await registerSW();
 
-  // Load flips
-  allFlips = await txReadAll();
+  // optional migration
+  await migrateOldFlipsIfAny();
 
-  // Normalize old records
-  let changed = false;
-  for (const item of allFlips) {
-    const c = normalizeCondition(item.condition);
-    if (item.condition !== c) { item.condition = c; changed = true; }
-    if (typeof item.batch !== "string") { item.batch = ""; changed = true; }
-    if (typeof item.setImageUrl !== "string") { item.setImageUrl = ""; changed = true; }
-    if (item.boxIncluded !== "yes" && item.boxIncluded !== "no") { item.boxIncluded = "yes"; changed = true; }
-    if (item.manualIncluded !== "yes" && item.manualIncluded !== "no") { item.manualIncluded = "yes"; changed = true; }
-    if (changed) { item.updatedAt = Date.now(); await txPut(item); }
-    changed = false;
+  // load
+  inventory = await txGetAll(INVENTORY_STORE);
+  sales = await txGetAll(SALES_STORE);
+  expenses = await txGetAll(EXPENSES_STORE);
+
+  // normalize inventory sold status against sales
+  const soldIds = new Set(sales.map(s => s.inventoryId));
+  for (const i of inventory) {
+    const shouldSold = soldIds.has(i.id);
+    const newStatus = shouldSold ? "sold" : "in_stock";
+    if (i.status !== newStatus) {
+      i.status = newStatus;
+      i.updatedAt = Date.now();
+      await txPut(INVENTORY_STORE, i);
+    }
   }
-  allFlips = await txReadAll();
-  updateBatchUIFromAllFlips(allFlips);
+  inventory = await txGetAll(INVENTORY_STORE);
 
-  // Load expenses
-  allExpenses = await txReadAllExpenses();
-  renderExpensesTable(allExpenses);
-
-  // Hide preview initially
-  setPreview("");
+  setInvFormDefaults();
+  setSaleFormDefaults();
 
   rerender();
 
@@ -1215,7 +1461,6 @@ async function init() {
     tries++;
     if (window.Chart) {
       clearInterval(t);
-      // rerender already draws charts; this makes sure Chart.js is ready
       rerender();
     }
     if (tries > 40) clearInterval(t);
