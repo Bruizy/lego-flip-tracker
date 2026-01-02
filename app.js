@@ -35,6 +35,25 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
+/** ---------- View Tabs ---------- */
+function setView(viewId) {
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  document.querySelectorAll(".tabBtn").forEach(b => b.classList.remove("active"));
+
+  const view = document.getElementById(viewId);
+  if (view) view.classList.add("active");
+
+  const btn = document.querySelector(`.tabBtn[data-view="${viewId}"]`);
+  if (btn) btn.classList.add("active");
+
+  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  // Chart canvases sometimes need a rerender once visible
+  if (viewId === "viewStats") {
+    try { rerender(); } catch {}
+  }
+}
+
 /** ---------- Rebrickable ---------- */
 const RB_KEY_STORAGE = "rebrickable_api_key";
 function getRBKey() { return (localStorage.getItem(RB_KEY_STORAGE) || "").trim(); }
@@ -128,7 +147,7 @@ const DB_VERSION = 3; // inventory + sales + expenses
 const INVENTORY_STORE = "inventory";
 const SALES_STORE = "sales";
 const EXPENSES_STORE = "expenses";
-const OLD_FLIPS_STORE = "flips"; // legacy (optional)
+const OLD_FLIPS_STORE = "flips"; // legacy
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -158,9 +177,6 @@ function openDB() {
         es.createIndex("date", "date");
         es.createIndex("category", "category");
       }
-
-      // We intentionally do NOT delete OLD_FLIPS_STORE if present.
-      // Migration (if needed) is handled in init().
     };
 
     req.onsuccess = () => resolve(req.result);
@@ -224,9 +240,9 @@ async function storeExists(storeName) {
 }
 
 /** ---------- In-memory state ---------- */
-let inventory = []; // inventory items
-let sales = [];     // sales records
-let expenses = [];  // expenses records
+let inventory = [];
+let sales = [];
+let expenses = [];
 
 let profitLineChart = null;
 let marketBarChart = null;
@@ -237,11 +253,9 @@ let batchBarChart = null;
 function isSoldItem(invItem) {
   return invItem?.status === "sold";
 }
-
 function getSaleByInventoryId(invId) {
   return sales.find(s => s.inventoryId === invId) || null;
 }
-
 function calcSaleNet(invItem, saleRec, allocator) {
   if (!invItem || !saleRec) return null;
 
@@ -253,23 +267,21 @@ function calcSaleNet(invItem, saleRec, allocator) {
   const alloc = allocator.allocatedExpenseForSale(saleRec);
   const profitNet = revenue - purchase - material - shipping - alloc.total;
 
-  return {
-    revenue, purchase, material, shipping,
-    alloc,
-    profitNet
-  };
+  return { revenue, purchase, material, shipping, alloc, profitNet };
 }
 
 /** ---------- Expense allocation (by sold month revenue share) ---------- */
 function expenseBucketsByMonth(expensesList) {
-  const byMonth = new Map(); // ym -> { material, shipping, other, total }
+  const byMonth = new Map();
   for (const e of expensesList) {
     const key = ym(e.date);
     if (!key) continue;
     const amt = toNum(e.amount);
     if (amt <= 0) continue;
+
     const bucket = EXPENSE_CATEGORY_MAP[(e.category || "").trim()] || "other";
     if (!byMonth.has(key)) byMonth.set(key, { material: 0, shipping: 0, other: 0, total: 0 });
+
     const obj = byMonth.get(key);
     obj[bucket] += amt;
     obj.total += amt;
@@ -280,7 +292,6 @@ function expenseBucketsByMonth(expensesList) {
 function buildExpenseAllocator(salesList, expensesList) {
   const expByMonth = expenseBucketsByMonth(expensesList);
 
-  // total revenue by month (sold month)
   const revByMonth = new Map();
   const countByMonth = new Map();
   for (const s of salesList) {
@@ -294,6 +305,7 @@ function buildExpenseAllocator(salesList, expensesList) {
   function allocatedExpenseForSale(saleRec) {
     const key = ym(saleRec?.soldDate);
     if (!key) return { material: 0, shipping: 0, other: 0, total: 0 };
+
     const monthExp = expByMonth.get(key);
     if (!monthExp) return { material: 0, shipping: 0, other: 0, total: 0 };
 
@@ -315,8 +327,8 @@ function buildExpenseAllocator(salesList, expensesList) {
 }
 
 /** ---------- Rendering helpers ---------- */
-function renderThumb(url, imgId) {
-  const img = $(imgId);
+function renderThumb(url, imgSel) {
+  const img = $(imgSel);
   if (!img) return;
   const u = (url || "").trim();
   if (!u) {
@@ -355,12 +367,9 @@ function updateInventoryDatalist() {
   const dl = $("#inventoryList");
   if (!dl) return;
 
-  // only in_stock items (since you "select item to sell")
   const inStock = inventory.filter(i => i.status !== "sold");
-
   dl.innerHTML = inStock.map(i => {
     const label = `${(i.setNumber || "").trim()} ${i.name || ""}`.trim();
-    // store id in a data attribute trick: we will resolve by matching label later
     return `<option value="${escapeHtml(label)}"></option>`;
   }).join("");
 }
@@ -369,19 +378,16 @@ function resolveInventoryPickToId(text) {
   const t = (text || "").trim().toLowerCase();
   if (!t) return "";
 
-  // Try exact match on combined label
   for (const i of inventory) {
     if (i.status === "sold") continue;
     const label = `${(i.setNumber || "").trim()} ${i.name || ""}`.trim().toLowerCase();
     if (label === t) return i.id;
   }
 
-  // Try by set number contains
   const maybeNum = (text || "").trim();
   const bySet = inventory.find(i => i.status !== "sold" && (i.setNumber || "").trim() === maybeNum);
   if (bySet) return bySet.id;
 
-  // Try by partial name match (first match)
   const byName = inventory.find(i => i.status !== "sold" && (i.name || "").toLowerCase().includes(t));
   return byName?.id || "";
 }
@@ -417,6 +423,7 @@ function getFilteredInventoryView() {
   });
 }
 
+/** ---------- Expenses rendering ---------- */
 function renderExpenseSummary() {
   const el = $("#expenseSummary");
   if (!el) return;
@@ -457,8 +464,8 @@ function renderExpensesTable() {
   }
 }
 
+/** ---------- KPIs ---------- */
 function renderKPIs(allocator) {
-  // Only SOLD items / sales create revenue.
   let revenue = 0;
   let purchaseCost = 0;
   let materialCost = 0;
@@ -495,6 +502,7 @@ function renderKPIs(allocator) {
   $("#kpiProfit") && ($("#kpiProfit").textContent = money(profit));
 }
 
+/** ---------- Inventory table ---------- */
 function renderInventoryTable(viewList, allocator) {
   const tb = $("#invTbody");
   if (!tb) return;
@@ -587,7 +595,6 @@ function renderInventoryTable(viewList, allocator) {
 function renderCharts(allocator) {
   if (!window.Chart) return;
 
-  // Profit over time (by sold month)
   const profitByMonth = new Map();
   for (const s of sales) {
     const key = ym(s.soldDate);
@@ -600,7 +607,6 @@ function renderCharts(allocator) {
   const months = [...profitByMonth.keys()].sort();
   const profitVals = months.map(m => profitByMonth.get(m) || 0);
 
-  // Profit by marketplace
   const profitByMarket = new Map();
   for (const s of sales) {
     const inv = inventory.find(i => i.id === s.inventoryId);
@@ -613,7 +619,6 @@ function renderCharts(allocator) {
   const marketLabels = markets.map(([k]) => k);
   const marketVals = markets.map(([, v]) => v);
 
-  // Profit by condition
   const profitByCond = new Map();
   for (const s of sales) {
     const inv = inventory.find(i => i.id === s.inventoryId);
@@ -626,7 +631,6 @@ function renderCharts(allocator) {
   const condLabels = condOrder.map(k => CONDITION_LABELS[k]);
   const condVals = condOrder.map(k => profitByCond.get(k) || 0);
 
-  // Profit by batch
   const profitByBatch = new Map();
   for (const s of sales) {
     const inv = inventory.find(i => i.id === s.inventoryId);
@@ -641,7 +645,6 @@ function renderCharts(allocator) {
 
   const common = { color: "#e5edff", grid: "rgba(255,255,255,0.08)" };
 
-  // Line chart
   const lineEl = $("#profitLine");
   if (lineEl) {
     const ctx = lineEl.getContext("2d");
@@ -674,7 +677,6 @@ function renderCharts(allocator) {
     });
   }
 
-  // Market bar
   const marketEl = $("#marketBar");
   if (marketEl) {
     const ctx = marketEl.getContext("2d");
@@ -705,7 +707,6 @@ function renderCharts(allocator) {
     });
   }
 
-  // Condition bar
   const condEl = $("#conditionBar");
   if (condEl) {
     const ctx = condEl.getContext("2d");
@@ -736,7 +737,6 @@ function renderCharts(allocator) {
     });
   }
 
-  // Batch bar
   const batchEl = $("#batchBar");
   if (batchEl) {
     const ctx = batchEl.getContext("2d");
@@ -790,14 +790,12 @@ function setInvFormDefaults() {
   const f = $("#invForm");
   if (!f) return;
 
-  // keep batch as user typed; default date to today if empty
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, "0");
   const dd = String(today.getDate()).padStart(2, "0");
   if (!f.purchaseDate.value) f.purchaseDate.value = `${yyyy}-${mm}-${dd}`;
 
-  // preview hidden until lookup
   renderThumb("", "#invPhotoPreview");
 }
 
@@ -825,52 +823,17 @@ async function handleInvLookup() {
   toast("Set info filled ✅");
 }
 
-async function addInventoryFromForm(ev) {
-  ev.preventDefault();
-  const f = ev.target;
-  const fd = new FormData(f);
-  const obj = Object.fromEntries(fd.entries());
-
-  const item = {
-    id: uid(),
-    name: (obj.name || "").trim(),
-    setNumber: (obj.setNumber || "").trim(),
-    setImageUrl: (obj.setImageUrl || "").trim(),
-    purchaseDate: obj.purchaseDate || "",
-    purchaseCost: toNum(obj.purchaseCost),
-    materialCost: toNum(obj.materialCost),
-    condition: normalizeCondition(obj.condition),
-    batch: normalizeBatch(obj.batch),
-    boughtFrom: (obj.boughtFrom || "").trim(),
-    buyPayment: (obj.buyPayment || "").trim(),
-    boxIncluded: (obj.boxIncluded || "yes"),
-    manualIncluded: (obj.manualIncluded || "yes"),
-    status: "in_stock",
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  };
-
-  if (!item.name) return toast("Name is required.");
-  if (!item.purchaseDate) return toast("Purchase date is required.");
-  if (!item.purchaseCost || item.purchaseCost <= 0) return toast("Purchase cost required.");
-
-  await txPut(INVENTORY_STORE, item);
-  inventory = await txGetAll(INVENTORY_STORE);
-
-  toast("Added to inventory ✅");
-  clearInvForm(true);
-  rerender();
-}
-
 /** ---------- Sale form ---------- */
 function setSaleFormDefaults() {
   const f = $("#saleForm");
   if (!f) return;
+
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, "0");
   const dd = String(today.getDate()).padStart(2, "0");
   if (!f.soldDate.value) f.soldDate.value = `${yyyy}-${mm}-${dd}`;
+
   renderThumb("", "#salePhotoPreview");
 }
 
@@ -893,62 +856,107 @@ function setSaleSelection(invId) {
     return;
   }
 
-  // store selected id
   f.inventoryId.value = inv.id;
-
-  // show preview
   renderThumb(inv.setImageUrl || "", "#salePhotoPreview");
 }
 
-async function saveSaleFromForm(ev) {
-  ev.preventDefault();
-  const f = ev.target;
-  const fd = new FormData(f);
-  const obj = Object.fromEntries(fd.entries());
-
-  const invId = (obj.inventoryId || "").trim();
-  if (!invId) return toast("Select an inventory item first.");
-
+/** ---------- Inventory edit support ---------- */
+function fillInvFormForEdit(invId) {
   const inv = inventory.find(i => i.id === invId);
-  if (!inv) return toast("Selected item not found.");
+  if (!inv) return;
 
-  if (inv.status === "sold") return toast("That item is already sold.");
+  const f = $("#invForm");
+  if (!f) return;
 
-  const soldDate = obj.soldDate || "";
-  const soldPrice = toNum(obj.soldPrice);
-  const fees = toNum(obj.fees);
+  f.dataset.editId = inv.id;
 
-  if (!soldDate) return toast("Sold date required.");
-  if (!soldPrice || soldPrice <= 0) return toast("Sold price required.");
+  f.batch.value = inv.batch || "";
+  f.purchaseDate.value = inv.purchaseDate || "";
+  f.boughtFrom.value = inv.boughtFrom || "";
+  f.buyPayment.value = inv.buyPayment || "";
+  f.condition.value = normalizeCondition(inv.condition);
+  f.materialCost.value = toNum(inv.materialCost);
+  f.boxIncluded.value = inv.boxIncluded || "yes";
+  f.manualIncluded.value = inv.manualIncluded || "yes";
+  f.setNumber.value = inv.setNumber || "";
+  f.name.value = inv.name || "";
+  f.purchaseCost.value = toNum(inv.purchaseCost);
+  f.setImageUrl.value = inv.setImageUrl || "";
+  renderThumb(inv.setImageUrl || "", "#invPhotoPreview");
 
-  const sale = {
-    id: uid(),
-    inventoryId: invId,
-    soldDate,
-    soldPrice,
-    fees,
-    soldOn: (obj.soldOn || "").trim(),
-    sellPayment: (obj.sellPayment || "").trim(),
-    notes: (obj.notes || "").trim(),
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  };
+  toast("Editing inventory item ✏️");
+  setView("viewInventory");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 
-  // write sale
-  await txPut(SALES_STORE, sale);
+async function saveInvEditIfNeeded(newItem) {
+  const f = $("#invForm");
+  const editId = f?.dataset?.editId || "";
+  if (!editId) return false;
 
-  // mark inventory as sold
-  inv.status = "sold";
-  inv.updatedAt = Date.now();
-  await txPut(INVENTORY_STORE, inv);
+  const old = inventory.find(i => i.id === editId);
+  if (!old) {
+    delete f.dataset.editId;
+    return false;
+  }
 
-  // reload
-  inventory = await txGetAll(INVENTORY_STORE);
-  sales = await txGetAll(SALES_STORE);
+  newItem.id = editId;
+  newItem.status = old.status || "in_stock";
+  newItem.createdAt = old.createdAt || Date.now();
+  newItem.updatedAt = Date.now();
 
-  toast("Sale saved ✅");
-  clearSaleForm();
-  rerender();
+  await txPut(INVENTORY_STORE, newItem);
+  delete f.dataset.editId;
+  return true;
+}
+
+/** ---------- Inventory table actions ---------- */
+async function handleInventoryTableClick(ev) {
+  const invEditId = ev.target?.getAttribute?.("data-inv-edit");
+  const invDelId = ev.target?.getAttribute?.("data-inv-del");
+  const saleDelForInv = ev.target?.getAttribute?.("data-sale-del");
+
+  if (invEditId) {
+    fillInvFormForEdit(invEditId);
+    return;
+  }
+
+  if (invDelId) {
+    const inv = inventory.find(i => i.id === invDelId);
+    if (!inv) return;
+    const ok = confirm(`Delete "${inv.name}"? This will also delete its sale if sold.`);
+    if (!ok) return;
+
+    const sale = getSaleByInventoryId(invDelId);
+    if (sale) await txDelete(SALES_STORE, sale.id);
+
+    await txDelete(INVENTORY_STORE, invDelId);
+
+    inventory = await txGetAll(INVENTORY_STORE);
+    sales = await txGetAll(SALES_STORE);
+    toast("Deleted 🗑️");
+    rerender();
+    return;
+  }
+
+  if (saleDelForInv) {
+    const inv = inventory.find(i => i.id === saleDelForInv);
+    const sale = getSaleByInventoryId(saleDelForInv);
+    if (!inv || !sale) return;
+
+    const ok = confirm(`Delete sale for "${inv.name}" and move back to In Stock?`);
+    if (!ok) return;
+
+    await txDelete(SALES_STORE, sale.id);
+    inv.status = "in_stock";
+    inv.updatedAt = Date.now();
+    await txPut(INVENTORY_STORE, inv);
+
+    inventory = await txGetAll(INVENTORY_STORE);
+    sales = await txGetAll(SALES_STORE);
+    toast("Sale removed ↩️");
+    rerender();
+  }
 }
 
 /** ---------- Expenses actions ---------- */
@@ -974,7 +982,7 @@ async function addExpenseFromForm(ev) {
   expenses = await txGetAll(EXPENSES_STORE);
 
   ev.target.reset();
-  // default date again
+
   const d = $("#expenseForm")?.querySelector('input[name="date"]');
   if (d) {
     const today = new Date();
@@ -1004,108 +1012,6 @@ async function clearExpenses() {
   expenses = await txGetAll(EXPENSES_STORE);
   toast("Expenses cleared 🗑️");
   rerender();
-}
-
-/** ---------- Inventory table actions (edit/delete/undo sale) ---------- */
-function fillInvFormForEdit(invId) {
-  const inv = inventory.find(i => i.id === invId);
-  if (!inv) return;
-
-  const f = $("#invForm");
-  if (!f) return;
-
-  // We keep it simple: editing overwrites by deleting + re-adding with same id
-  // We'll store edit id in a dataset on the form.
-  f.dataset.editId = inv.id;
-
-  f.batch.value = inv.batch || "";
-  f.purchaseDate.value = inv.purchaseDate || "";
-  f.boughtFrom.value = inv.boughtFrom || "";
-  f.buyPayment.value = inv.buyPayment || "";
-  f.condition.value = normalizeCondition(inv.condition);
-  f.materialCost.value = toNum(inv.materialCost);
-  f.boxIncluded.value = inv.boxIncluded || "yes";
-  f.manualIncluded.value = inv.manualIncluded || "yes";
-  f.setNumber.value = inv.setNumber || "";
-  f.name.value = inv.name || "";
-  f.purchaseCost.value = toNum(inv.purchaseCost);
-  f.setImageUrl.value = inv.setImageUrl || "";
-  renderThumb(inv.setImageUrl || "", "#invPhotoPreview");
-
-  toast("Editing inventory item ✏️");
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-async function saveInvEditIfNeeded(newItem) {
-  const f = $("#invForm");
-  const editId = f?.dataset?.editId || "";
-  if (!editId) return false;
-
-  const old = inventory.find(i => i.id === editId);
-  if (!old) {
-    delete f.dataset.editId;
-    return false;
-  }
-
-  // preserve status
-  newItem.id = editId;
-  newItem.status = old.status || "in_stock";
-  newItem.createdAt = old.createdAt || Date.now();
-  newItem.updatedAt = Date.now();
-
-  await txPut(INVENTORY_STORE, newItem);
-  delete f.dataset.editId;
-  return true;
-}
-
-async function handleInventoryTableClick(ev) {
-  const invEditId = ev.target?.getAttribute?.("data-inv-edit");
-  const invDelId = ev.target?.getAttribute?.("data-inv-del");
-  const saleDelForInv = ev.target?.getAttribute?.("data-sale-del");
-
-  if (invEditId) {
-    fillInvFormForEdit(invEditId);
-    return;
-  }
-
-  if (invDelId) {
-    const inv = inventory.find(i => i.id === invDelId);
-    if (!inv) return;
-    const ok = confirm(`Delete "${inv.name}"? This will also delete its sale if sold.`);
-    if (!ok) return;
-
-    // delete sale if exists
-    const sale = getSaleByInventoryId(invDelId);
-    if (sale) await txDelete(SALES_STORE, sale.id);
-
-    await txDelete(INVENTORY_STORE, invDelId);
-
-    inventory = await txGetAll(INVENTORY_STORE);
-    sales = await txGetAll(SALES_STORE);
-    toast("Deleted 🗑️");
-    rerender();
-    return;
-  }
-
-  if (saleDelForInv) {
-    // Undo sale: delete sale record + mark inventory as in_stock
-    const inv = inventory.find(i => i.id === saleDelForInv);
-    const sale = getSaleByInventoryId(saleDelForInv);
-    if (!inv || !sale) return;
-
-    const ok = confirm(`Delete sale for "${inv.name}" and move back to In Stock?`);
-    if (!ok) return;
-
-    await txDelete(SALES_STORE, sale.id);
-    inv.status = "in_stock";
-    inv.updatedAt = Date.now();
-    await txPut(INVENTORY_STORE, inv);
-
-    inventory = await txGetAll(INVENTORY_STORE);
-    sales = await txGetAll(SALES_STORE);
-    toast("Sale removed ↩️");
-    rerender();
-  }
 }
 
 /** ---------- Export / Import ---------- */
@@ -1140,7 +1046,6 @@ async function importData(file) {
     return;
   }
 
-  // Import inventory
   if (Array.isArray(inv)) {
     for (const raw of inv) {
       const item = {
@@ -1166,7 +1071,6 @@ async function importData(file) {
     }
   }
 
-  // Import sales
   if (Array.isArray(sal)) {
     for (const raw of sal) {
       const sale = {
@@ -1186,7 +1090,6 @@ async function importData(file) {
     }
   }
 
-  // Import expenses
   if (Array.isArray(exp)) {
     for (const raw of exp) {
       const e = {
@@ -1206,7 +1109,6 @@ async function importData(file) {
   sales = await txGetAll(SALES_STORE);
   expenses = await txGetAll(EXPENSES_STORE);
 
-  // Ensure sold inventory matches sales existence
   const soldIds = new Set(sales.map(s => s.inventoryId));
   for (const i of inventory) {
     const shouldSold = soldIds.has(i.id);
@@ -1255,15 +1157,13 @@ async function registerSW() {
 
 /** ---------- Legacy migration (optional) ---------- */
 async function migrateOldFlipsIfAny() {
-  // If user had old app data in store "flips", migrate into inventory + sales once.
   const hasOld = await storeExists(OLD_FLIPS_STORE);
   if (!hasOld) return;
 
   const existingInv = await txGetAll(INVENTORY_STORE);
   const existingSales = await txGetAll(SALES_STORE);
-  if (existingInv.length || existingSales.length) return; // already using new model
+  if (existingInv.length || existingSales.length) return;
 
-  // Read old flips
   const db = await openDB();
   const oldFlips = await new Promise((resolve) => {
     try {
@@ -1324,17 +1224,24 @@ async function migrateOldFlipsIfAny() {
 
 /** ---------- Init ---------- */
 async function init() {
-  // default dates
+  // Tabs
+  $("#topTabs")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".tabBtn");
+    if (!btn) return;
+    setView(btn.dataset.view);
+  });
+  setView("viewInventory");
+
+  // Defaults
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, "0");
   const dd = String(today.getDate()).padStart(2, "0");
-
   $("#invForm")?.querySelector('input[name="purchaseDate"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
   $("#saleForm")?.querySelector('input[name="soldDate"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
   $("#expenseForm")?.querySelector('input[name="date"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
 
-  // buttons
+  // Header buttons
   $("#apiKeyBtn")?.addEventListener("click", async () => {
     const current = getRBKey();
     const entered = prompt("Rebrickable API key (stored locally in your browser):", current);
@@ -1353,9 +1260,8 @@ async function init() {
     e.target.value = "";
   });
 
-  // forms
+  // Inventory submit (supports edit mode)
   $("#invForm")?.addEventListener("submit", async (ev) => {
-    // build item from form, but support edit mode
     ev.preventDefault();
     const f = ev.target;
     const fd = new FormData(f);
@@ -1384,7 +1290,6 @@ async function init() {
     if (!base.purchaseDate) return toast("Purchase date is required.");
     if (!base.purchaseCost || base.purchaseCost <= 0) return toast("Purchase cost required.");
 
-    // if editing, overwrite existing with same id + preserve status
     const didEdit = await saveInvEditIfNeeded(base);
     if (!didEdit) await txPut(INVENTORY_STORE, base);
 
@@ -1400,10 +1305,56 @@ async function init() {
     clearInvForm(true);
   });
 
-  $("#saleForm")?.addEventListener("submit", saveSaleFromForm);
+  // Sale
+  $("#saleForm")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    const fd = new FormData(f);
+    const obj = Object.fromEntries(fd.entries());
+
+    const invId = (obj.inventoryId || "").trim();
+    if (!invId) return toast("Select an inventory item first.");
+
+    const inv = inventory.find(i => i.id === invId);
+    if (!inv) return toast("Selected item not found.");
+    if (inv.status === "sold") return toast("That item is already sold.");
+
+    const soldDate = obj.soldDate || "";
+    const soldPrice = toNum(obj.soldPrice);
+    const fees = toNum(obj.fees);
+
+    if (!soldDate) return toast("Sold date required.");
+    if (!soldPrice || soldPrice <= 0) return toast("Sold price required.");
+
+    const sale = {
+      id: uid(),
+      inventoryId: invId,
+      soldDate,
+      soldPrice,
+      fees,
+      soldOn: (obj.soldOn || "").trim(),
+      sellPayment: (obj.sellPayment || "").trim(),
+      notes: (obj.notes || "").trim(),
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    await txPut(SALES_STORE, sale);
+
+    inv.status = "sold";
+    inv.updatedAt = Date.now();
+    await txPut(INVENTORY_STORE, inv);
+
+    inventory = await txGetAll(INVENTORY_STORE);
+    sales = await txGetAll(SALES_STORE);
+
+    toast("Sale saved ✅");
+    clearSaleForm();
+    rerender();
+  });
+
   $("#saleResetBtn")?.addEventListener("click", clearSaleForm);
 
-  // inventory pick behavior
   $("#invPick")?.addEventListener("input", (e) => {
     const id = resolveInventoryPickToId(e.target.value);
     const f = $("#saleForm");
@@ -1412,32 +1363,30 @@ async function init() {
     setSaleSelection(id);
   });
 
-  // filters
+  // Filters
   $("#searchInput")?.addEventListener("input", rerender);
   $("#statusFilter")?.addEventListener("change", rerender);
   $("#conditionFilter")?.addEventListener("change", rerender);
   $("#batchFilter")?.addEventListener("change", rerender);
 
-  // expenses
+  // Expenses
   $("#expenseForm")?.addEventListener("submit", addExpenseFromForm);
   $("#expenseTbody")?.addEventListener("click", handleExpensesTableClick);
   $("#clearExpensesBtn")?.addEventListener("click", clearExpenses);
 
-  // table actions
+  // Table row actions
   $("#invTbody")?.addEventListener("click", handleInventoryTableClick);
 
   setupInstallFlow();
   await registerSW();
 
-  // optional migration
   await migrateOldFlipsIfAny();
 
-  // load
   inventory = await txGetAll(INVENTORY_STORE);
   sales = await txGetAll(SALES_STORE);
   expenses = await txGetAll(EXPENSES_STORE);
 
-  // normalize inventory sold status against sales
+  // Ensure statuses match sales
   const soldIds = new Set(sales.map(s => s.inventoryId));
   for (const i of inventory) {
     const shouldSold = soldIds.has(i.id);
@@ -1452,10 +1401,9 @@ async function init() {
 
   setInvFormDefaults();
   setSaleFormDefaults();
-
   rerender();
 
-  // charts might load slightly after Chart.js
+  // Chart.js may load a moment later
   let tries = 0;
   const t = setInterval(() => {
     tries++;
