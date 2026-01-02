@@ -1325,7 +1325,9 @@ function renderCharts(sales, alloc) {
  *  CSV Import
  *  ======================= */
 function parseCSV(text) {
-  // Simple CSV parser with quotes support
+  // Strip UTF-8 BOM if present
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+
   const rows = [];
   let i = 0;
   let field = "";
@@ -1345,6 +1347,7 @@ function parseCSV(text) {
     const c = text[i];
 
     if (c === '"') {
+      // Escaped quote inside quotes: ""
       if (inQuotes && text[i + 1] === '"') {
         field += '"';
         i += 2;
@@ -1357,9 +1360,15 @@ function parseCSV(text) {
 
     if (!inQuotes && (c === "," || c === "\n" || c === "\r")) {
       pushField();
-      if (c === "\n") pushRow();
+
+      // NEW: treat BOTH \n and \r as row breaks
+      if (c === "\n" || c === "\r") {
+        pushRow();
+      }
+
       i++;
-      // handle \r\n
+
+      // swallow the second char in CRLF
       if (c === "\r" && text[i] === "\n") i++;
       continue;
     }
@@ -1367,12 +1376,14 @@ function parseCSV(text) {
     field += c;
     i++;
   }
+
   pushField();
   pushRow();
 
   // Trim empty trailing rows
   return rows.filter((r) => r.some((x) => String(x).trim() !== ""));
 }
+
 
 function headerMap(headers) {
   const m = new Map();
