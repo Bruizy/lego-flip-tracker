@@ -1,33 +1,34 @@
-/* app.js (FULL UPDATED)
-   - Inventory + Sell + Expenses + Stats (deep)
-   - Edit sold items (Sell tab loads existing sale for that item)
-   - Notes + Sold Location + Buyer shown in Inventory list
-   - Deeper stats + extra charts + filters
-*/
+/* app.js */
 "use strict";
 
-/** ---------- Utilities ---------- */
+/** =======================
+ *  Utilities
+ *  ======================= */
 const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+const toNum = (v) => {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  // allow "$1,234.56"
+  const s = String(v).trim().replace(/\$/g, "").replace(/,/g, "");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+};
 
 const money = (n) => {
   const v = Number.isFinite(n) ? n : 0;
   return v.toLocaleString(undefined, { style: "currency", currency: "USD" });
 };
+
 const pct = (n) => `${(Number.isFinite(n) ? n : 0).toFixed(1)}%`;
-const toNum = (v) => {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
-  // Allow "$1,234.56" or "1,234.56"
-  const s = String(v).trim().replace(/\$/g, "").replace(/,/g, "");
-  const n = Number(s);
-  return Number.isFinite(n) ? n : 0;
-};
+
+const uid = () =>
+  crypto.randomUUID?.() ?? `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
 const ym = (dateStr) => {
   if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
   return dateStr.slice(0, 7);
 };
-const uid = () => crypto.randomUUID?.() ?? `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
 function toast(msg) {
   const el = $("#toast");
@@ -37,6 +38,7 @@ function toast(msg) {
   clearTimeout(toast._t);
   toast._t = setTimeout(() => el.classList.remove("show"), 2200);
 }
+
 function escapeHtml(s) {
   return String(s ?? "")
     .replaceAll("&", "&amp;")
@@ -45,36 +47,25 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
-function parseDateMs(d) {
-  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return NaN;
-  const ms = Date.parse(`${d}T00:00:00`);
-  return Number.isFinite(ms) ? ms : NaN;
-}
-function daysBetween(a, b) {
-  const ams = parseDateMs(a);
-  const bms = parseDateMs(b);
-  if (!Number.isFinite(ams) || !Number.isFinite(bms)) return null;
-  return Math.max(0, Math.round((bms - ams) / (1000 * 60 * 60 * 24)));
+
+function daysBetween(dateA, dateB) {
+  if (!dateA || !dateB) return null;
+  const a = new Date(dateA);
+  const b = new Date(dateB);
+  if (isNaN(a) || isNaN(b)) return null;
+  const ms = b - a;
+  if (!Number.isFinite(ms)) return null;
+  return Math.max(0, Math.round(ms / (1000 * 60 * 60 * 24)));
 }
 
-/** ---------- Tabs / Views ---------- */
-const LAST_VIEW_KEY = "lft_last_view";
-function setActiveView(viewId) {
-  $$(".view").forEach(v => v.classList.toggle("active", v.id === viewId));
-  $$(".tabBtn").forEach(b => b.classList.toggle("active", b.dataset.view === viewId));
-  localStorage.setItem(LAST_VIEW_KEY, viewId);
-}
-function setupTabs() {
-  $$(".tabBtn").forEach(btn => {
-    btn.addEventListener("click", () => setActiveView(btn.dataset.view));
-  });
-  const last = localStorage.getItem(LAST_VIEW_KEY);
-  if (last && $("#" + last)) setActiveView(last);
-}
-
-/** ---------- Rebrickable (name + photo) ---------- */
+/** =======================
+ *  Rebrickable
+ *  ======================= */
 const RB_KEY_STORAGE = "rebrickable_api_key";
-function getRBKey() { return (localStorage.getItem(RB_KEY_STORAGE) || "").trim(); }
+
+function getRBKey() {
+  return (localStorage.getItem(RB_KEY_STORAGE) || "").trim();
+}
 function setRBKey(key) {
   const k = (key || "").trim();
   if (!k) localStorage.removeItem(RB_KEY_STORAGE);
@@ -96,62 +87,77 @@ function normalizeSetNumberForRB(raw) {
 }
 async function rebrickableLookup(setNumberRaw) {
   const key = await ensureRBKey();
-  if (!key) { toast("No API key set."); return null; }
+  if (!key) return null;
 
   const setNum = normalizeSetNumberForRB(setNumberRaw);
-  if (!setNum) { toast("Type a set number first."); return null; }
+  if (!setNum) return null;
 
-  const url = `https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(setNum)}/?key=${encodeURIComponent(key)}`;
+  const url = `https://rebrickable.com/api/v3/lego/sets/${encodeURIComponent(setNum)}/?key=${encodeURIComponent(
+    key
+  )}`;
+
   try {
-    const res = await fetch(url, { method: "GET" });
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403) toast("API key rejected. Click API Key and try again.");
-      else toast(`Lookup failed (${res.status}).`);
-      return null;
-    }
+    const res = await fetch(url);
+    if (!res.ok) return null;
     const data = await res.json();
-    return { name: data?.name || "", img: data?.set_img_url || "" };
-  } catch (e) {
-    console.warn(e);
-    toast("Lookup error (network/CORS).");
+    return {
+      name: data?.name || "",
+      img: data?.set_img_url || "",
+    };
+  } catch {
     return null;
   }
 }
 
-/** ---------- Condition helpers (ONLY 4) ---------- */
+/** =======================
+ *  Constants / Labels
+ *  ======================= */
 const CONDITION_LABELS = {
   new_sealed: "New (sealed)",
   new_openbox: "New (open box)",
   used_complete: "Used (complete)",
-  used_incomplete: "Used (incomplete)"
+  used_incomplete: "Used (incomplete)",
 };
+
 function normalizeCondition(v) {
   const key = (v || "").trim();
   return CONDITION_LABELS[key] ? key : "used_incomplete";
 }
-function conditionBadge(condKey) {
-  const key = normalizeCondition(condKey);
-  const label = CONDITION_LABELS[key];
-  const emoji = ({
-    new_sealed: "🟩",
-    new_openbox: "🟨",
-    used_complete: "🟦",
-    used_incomplete: "🟧"
-  })[key] || "🟧";
-  return `<span class="badge cond">${emoji} ${escapeHtml(label)}</span>`;
+
+function conditionBadge(key) {
+  const k = normalizeCondition(key);
+  const emoji =
+    {
+      new_sealed: "🟩",
+      new_openbox: "🟨",
+      used_complete: "🟦",
+      used_incomplete: "🟧",
+    }[k] || "🟧";
+  return `<span class="badge cond">${emoji} ${escapeHtml(CONDITION_LABELS[k])}</span>`;
 }
 
-/** ---------- Batch helpers ---------- */
-function normalizeBatch(v) { return (v || "").trim(); }
+function normalizeBatch(v) {
+  return (v || "").trim();
+}
 function batchBadge(batch) {
   const b = normalizeBatch(batch);
   if (!b) return `<span class="small">—</span>`;
   return `<span class="badge batch">📦 ${escapeHtml(b)}</span>`;
 }
 
-/** ---------- IndexedDB (Inventory + Sales + Expenses) ---------- */
-const DB_NAME = "legoFlipDB";
-const DB_VERSION = 4;
+function renderThumb(url) {
+  const u = (url || "").trim();
+  if (!u) return "";
+  const safe = escapeHtml(u);
+  // NOTE: user asked not clickable earlier; keep non-clickable for simplicity
+  return `<img class="thumb" src="${safe}" alt="set" loading="lazy" />`;
+}
+
+/** =======================
+ *  IndexedDB
+ *  ======================= */
+const DB_NAME = "legoFlipDB2";
+const DB_VERSION = 1;
 
 const INVENTORY_STORE = "inventory";
 const SALES_STORE = "sales";
@@ -168,18 +174,19 @@ function openDB() {
       if (!db.objectStoreNames.contains(INVENTORY_STORE)) {
         const s = db.createObjectStore(INVENTORY_STORE, { keyPath: "id" });
         s.createIndex("purchaseDate", "purchaseDate");
-        s.createIndex("name", "name");
-        s.createIndex("setNumber", "setNumber");
+        s.createIndex("status", "status");
         s.createIndex("batch", "batch");
+        s.createIndex("setNumber", "setNumber");
+        s.createIndex("name", "name");
       }
 
       // Sales
       if (!db.objectStoreNames.contains(SALES_STORE)) {
         const s = db.createObjectStore(SALES_STORE, { keyPath: "id" });
-        s.createIndex("inventoryId", "inventoryId", { unique: true }); // 1 sale per inventory item
+        s.createIndex("inventoryId", "inventoryId", { unique: true });
         s.createIndex("soldDate", "soldDate");
         s.createIndex("soldOn", "soldOn");
-        s.createIndex("buyer", "buyer");
+        s.createIndex("city", "city");
       }
 
       // Expenses
@@ -206,17 +213,19 @@ async function txGetAll(storeName) {
     tx.oncomplete = () => db.close();
   });
 }
-async function txPut(storeName, obj) {
+
+async function txPut(storeName, item) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     const store = tx.objectStore(storeName);
-    const req = store.put(obj);
+    const req = store.put(item);
     req.onsuccess = () => resolve(true);
     req.onerror = () => reject(req.error);
     tx.oncomplete = () => db.close();
   });
 }
+
 async function txDelete(storeName, id) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -228,6 +237,7 @@ async function txDelete(storeName, id) {
     tx.oncomplete = () => db.close();
   });
 }
+
 async function txClear(storeName) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -239,367 +249,84 @@ async function txClear(storeName) {
     tx.oncomplete = () => db.close();
   });
 }
-async function txGetSaleByInventoryId(inventoryId) {
+
+async function saleByInventoryId(inventoryId) {
   const db = await openDB();
   return new Promise((resolve) => {
     const tx = db.transaction(SALES_STORE, "readonly");
     const store = tx.objectStore(SALES_STORE);
-    const idx = store.index("inventoryId");
-    const req = idx.get(inventoryId);
+    let index;
+    try {
+      index = store.index("inventoryId");
+    } catch {
+      resolve(null);
+      db.close();
+      return;
+    }
+    const req = index.get(inventoryId);
     req.onsuccess = () => resolve(req.result || null);
     req.onerror = () => resolve(null);
     tx.oncomplete = () => db.close();
   });
 }
 
-/** ---------- App State ---------- */
-let inventory = [];
-let sales = [];
-let expenses = [];
+/** =======================
+ *  State
+ *  ======================= */
+let allInv = [];
+let allSales = [];
+let allExpenses = [];
 
-function saleMap() {
-  const m = new Map();
-  for (const s of sales) m.set(s.inventoryId, s);
-  return m;
+let charts = {
+  profitLine: null,
+  revProfitCombo: null,
+  marketBar: null,
+  marketRevenueBar: null,
+  cityBar: null,
+  conditionBar: null,
+  sellThroughCond: null,
+  batchBar: null,
+  batchSpendRev: null,
+  feesLine: null,
+};
+
+/** =======================
+ *  Tabs
+ *  ======================= */
+function showView(id) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+  document.querySelectorAll(".tabBtn").forEach((b) => b.classList.remove("active"));
+  $(`#${id}`)?.classList.add("active");
+  document.querySelector(`.tabBtn[data-view="${id}"]`)?.classList.add("active");
+  // small QoL
+  window.scrollTo({ top: 0, behavior: "instant" });
 }
 
-/** ---------- Rendering helpers ---------- */
-function renderItemThumb(url) {
-  const u = (url || "").trim();
-  if (!u) return "";
-  const safe = escapeHtml(u);
-  // Click opens image in new tab
-  return `<a href="${safe}" target="_blank" rel="noopener">
-    <img class="thumb clickable" src="${safe}" alt="set" loading="lazy" />
-  </a>`;
+/** =======================
+ *  Inventory (domain)
+ *  ======================= */
+function invTotalCost(inv) {
+  return toNum(inv.purchaseCost) + toNum(inv.materialCost);
 }
-function setPreview(imgEl, url) {
-  if (!imgEl) return;
-  const u = (url || "").trim();
-  if (!u) {
-    imgEl.removeAttribute("src");
-    imgEl.style.display = "none";
-    return;
-  }
-  imgEl.src = u;
-  imgEl.style.display = "block";
+function saleRevenue(s) {
+  return toNum(s.itemPrice) + toNum(s.shippingCharged);
+}
+function saleDirectCosts(inv, s) {
+  // direct: purchase + per-set material + shipping paid + platform fees
+  return invTotalCost(inv) + toNum(s.shippingPaid) + toNum(s.platformFees);
 }
 
-/** ---------- Inventory form ---------- */
-function normalizeInventoryForm(fd) {
-  const o = Object.fromEntries(fd.entries());
-  return {
-    id: o.id || uid(),
-    name: (o.name || "").trim(),
-    setNumber: (o.setNumber || "").trim(),
-    setImageUrl: (o.setImageUrl || "").trim(),
-    purchaseDate: o.purchaseDate || "",
-    purchaseCost: toNum(o.purchaseCost),
-    materialCost: toNum(o.materialCost),
-    condition: normalizeCondition(o.condition),
-    batch: normalizeBatch(o.batch),
-    boughtFrom: (o.boughtFrom || "").trim(),
-    buyPayment: (o.buyPayment || "").trim(),
-    boxIncluded: (o.boxIncluded || "yes"),
-    manualIncluded: (o.manualIncluded || "yes"),
-    createdAt: o.createdAt ? toNum(o.createdAt) : Date.now(),
-    updatedAt: Date.now()
-  };
-}
-function fillInventoryForm(item) {
-  const f = $("#invForm");
-  if (!f) return;
-
-  f.id.value = item?.id || "";
-  f.name.value = item?.name || "";
-  f.setNumber.value = item?.setNumber || "";
-  f.setImageUrl.value = item?.setImageUrl || "";
-  f.purchaseDate.value = item?.purchaseDate || "";
-  f.purchaseCost.value = item?.purchaseCost ?? "";
-  f.materialCost.value = item?.materialCost ?? 0;
-  f.condition.value = normalizeCondition(item?.condition || "used_incomplete");
-  f.batch.value = item?.batch || "";
-  f.boughtFrom.value = item?.boughtFrom || "";
-  f.buyPayment.value = item?.buyPayment || "";
-  f.boxIncluded.value = item?.boxIncluded || "yes";
-  f.manualIncluded.value = item?.manualIncluded || "yes";
-
-  setPreview($("#invPhotoPreview"), item?.setImageUrl || "");
-  $("#invSaveBtn") && ($("#invSaveBtn").textContent = item ? "Update Inventory" : "Save Inventory");
-}
-function resetInventoryForm() { fillInventoryForm(null); }
-
-async function saveInventory(ev) {
-  ev.preventDefault();
-  const item = normalizeInventoryForm(new FormData(ev.target));
-  if (!item.name) return toast("Name required.");
-  if (!item.purchaseDate) return toast("Purchase date required.");
-  if (item.purchaseCost < 0) return toast("Purchase cost invalid.");
-
-  // preserve createdAt if exists
-  const existing = inventory.find(x => x.id === item.id);
-  if (existing) item.createdAt = existing.createdAt || item.createdAt;
-
-  await txPut(INVENTORY_STORE, item);
-  toast(existing ? "Inventory updated ✅" : "Inventory saved ✅");
-
-  inventory = await txGetAll(INVENTORY_STORE);
-  rerenderAll();
-  resetInventoryForm();
-}
-
-/** ---------- Sell form ---------- */
-function normalizeSaleForm(fd) {
-  const o = Object.fromEntries(fd.entries());
-  return {
-    id: o.saleId || uid(),
-    inventoryId: (o.inventoryId || "").trim(),
-    soldDate: o.soldDate || "",
-    soldPrice: toNum(o.soldPrice),
-    fees: toNum(o.fees),
-    soldOn: (o.soldOn || "").trim(),
-    sellPayment: (o.sellPayment || "").trim(),
-    buyer: (o.buyer || "").trim(),
-    notes: (o.notes || "").trim(),
-    createdAt: o.createdAt ? toNum(o.createdAt) : Date.now(),
-    updatedAt: Date.now()
-  };
-}
-function resetSaleForm() {
-  const f = $("#saleForm");
-  if (!f) return;
-  f.reset();
-  f.inventoryId.value = "";
-  f.saleId.value = "";
-  $("#saleSaveBtn") && ($("#saleSaveBtn").textContent = "Save Sale");
-  setPreview($("#salePhotoPreview"), "");
-  // remove delete button if we added it
-  const del = $("#saleDeleteBtn");
-  if (del) del.remove();
-}
-function fillSaleForm(invItem, sale) {
-  const f = $("#saleForm");
-  if (!f) return;
-  if (!invItem) return;
-
-  // Set selection display (for convenience)
-  const label = `${invItem.name || "(unnamed)"}${invItem.setNumber ? ` • #${invItem.setNumber}` : ""}`;
-  $("#invPick") && ($("#invPick").value = label);
-
-  f.inventoryId.value = invItem.id;
-
-  if (sale) {
-    f.saleId.value = sale.id;
-    f.soldDate.value = sale.soldDate || "";
-    f.soldPrice.value = sale.soldPrice ?? "";
-    f.fees.value = sale.fees ?? 0;
-    f.soldOn.value = sale.soldOn || "";
-    f.sellPayment.value = sale.sellPayment || "";
-    f.buyer.value = sale.buyer || "";
-    f.notes.value = sale.notes || "";
-    $("#saleSaveBtn") && ($("#saleSaveBtn").textContent = "Update Sale");
-    ensureSaleDeleteButton();
-  } else {
-    f.saleId.value = "";
-    f.soldDate.value = "";
-    f.soldPrice.value = "";
-    f.fees.value = 0;
-    f.soldOn.value = "";
-    f.sellPayment.value = "";
-    f.buyer.value = "";
-    f.notes.value = "";
-    $("#saleSaveBtn") && ($("#saleSaveBtn").textContent = "Save Sale");
-    const del = $("#saleDeleteBtn"); if (del) del.remove();
-  }
-
-  setPreview($("#salePhotoPreview"), invItem.setImageUrl || "");
-}
-function ensureSaleDeleteButton() {
-  const row = $("#saleForm .row.buttons");
-  if (!row) return;
-  if ($("#saleDeleteBtn")) return;
-
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.id = "saleDeleteBtn";
-  btn.className = "btn";
-  btn.textContent = "Delete Sale";
-  btn.addEventListener("click", async () => {
-    const f = $("#saleForm");
-    const saleId = f?.saleId?.value;
-    if (!saleId) return;
-    const ok = confirm("Delete this sale? Item will return to In Stock.");
-    if (!ok) return;
-    await txDelete(SALES_STORE, saleId);
-    sales = await txGetAll(SALES_STORE);
-    toast("Sale deleted 🗑️");
-    resetSaleForm();
-    rerenderAll();
-  });
-
-  // Put it next to Clear by appending (you can reorder in CSS if wanted)
-  row.appendChild(btn);
-}
-
-async function saveSale(ev) {
-  ev.preventDefault();
-  const f = ev.target;
-  const sale = normalizeSaleForm(new FormData(f));
-
-  if (!sale.inventoryId) return toast("Pick an inventory item.");
-  if (!sale.soldDate) return toast("Sold date required.");
-  if (sale.soldPrice <= 0) return toast("Sold price required.");
-
-  // Enforce one sale per inventory item:
-  const existing = sales.find(s => s.inventoryId === sale.inventoryId);
-  if (existing && existing.id !== sale.id) {
-    // If already exists, treat as edit (update same id)
-    sale.id = existing.id;
-    sale.createdAt = existing.createdAt || sale.createdAt;
-  } else if (existing) {
-    sale.createdAt = existing.createdAt || sale.createdAt;
-  }
-
-  await txPut(SALES_STORE, sale);
-  toast(existing ? "Sale updated ✅" : "Sale saved ✅");
-
-  sales = await txGetAll(SALES_STORE);
-  rerenderAll();
-  // keep selection, but reset fields lightly
-  resetSaleForm();
-}
-
-/** ---------- Expenses ---------- */
-function normalizeExpense(fd) {
-  const o = Object.fromEntries(fd.entries());
-  return {
-    id: uid(),
-    amount: toNum(o.amount),
-    category: (o.category || "").trim(),
-    date: o.date || "",
-    note: (o.note || "").trim(),
-    createdAt: Date.now()
-  };
-}
-async function addExpense(ev) {
-  ev.preventDefault();
-  const exp = normalizeExpense(new FormData(ev.target));
-  if (!exp.amount || exp.amount <= 0) return toast("Expense amount required.");
-  if (!exp.date) return toast("Expense date required.");
-  if (!exp.category) return toast("Category required.");
-
-  await txPut(EXPENSES_STORE, exp);
-  expenses = await txGetAll(EXPENSES_STORE);
-
-  renderExpensesTable();
-  renderExpenseSummary();
-  rerenderStats(); // stats depend on expenses
-  toast("Expense added ✅");
-  ev.target.reset();
-
-  // default date again
-  const d = $("#expenseForm")?.querySelector('input[name="date"]');
-  if (d) d.value = todayStr();
-}
-async function handleExpenseTableClick(ev) {
-  const id = ev.target?.getAttribute?.("data-exp-del");
-  if (!id) return;
-  await txDelete(EXPENSES_STORE, id);
-  expenses = await txGetAll(EXPENSES_STORE);
-  renderExpensesTable();
-  renderExpenseSummary();
-  rerenderStats();
-  toast("Expense deleted 🗑️");
-}
-async function clearExpenses() {
-  const ok = confirm("Clear all expenses? This cannot be undone.");
-  if (!ok) return;
-  await txClear(EXPENSES_STORE);
-  expenses = [];
-  renderExpensesTable();
-  renderExpenseSummary();
-  rerenderStats();
-  toast("Expenses cleared 🗑️");
-}
-function renderExpensesTable() {
-  const tb = $("#expenseTbody");
-  if (!tb) return;
-  tb.innerHTML = "";
-  const sorted = [...expenses].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-
-  for (const e of sorted) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td class="mono">${escapeHtml(e.date || "—")}</td>
-      <td>${escapeHtml(e.category || "")}</td>
-      <td>${escapeHtml(e.note || "")}</td>
-      <td class="mono">${money(toNum(e.amount))}</td>
-      <td>
-        <div class="rowActions">
-          <button class="iconBtn" data-exp-del="${e.id}" title="Delete">🗑️</button>
-        </div>
-      </td>
-    `;
-    tb.appendChild(tr);
-  }
-}
-function expenseCategoryTotals(expList) {
-  const m = new Map();
-  for (const e of expList) {
-    const k = (e.category || "Other").trim() || "Other";
-    m.set(k, (m.get(k) || 0) + toNum(e.amount));
-  }
-  return m;
-}
-function renderExpenseSummary() {
-  const wrap = $("#expenseSummary");
-  if (!wrap) return;
-
-  const totals = expenseCategoryTotals(expenses);
-  const keys = [...totals.keys()].sort((a, b) => a.localeCompare(b));
-
-  if (!keys.length) {
-    wrap.innerHTML = `<div class="small">No expenses yet.</div>`;
-    return;
-  }
-
-  const chips = keys.map(k => `<span class="badge">${escapeHtml(k)}: <span class="mono">${money(totals.get(k) || 0)}</span></span>`).join(" ");
-  wrap.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${chips}</div>`;
-}
-
-/** ---------- Inventory list (combined Inventory + Sale) ---------- */
-function updateBatchFiltersFromInventory() {
-  const batches = [...new Set(inventory.map(i => normalizeBatch(i.batch)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-
-  const bf = $("#batchFilter");
-  if (bf) {
-    const cur = bf.value || "all";
-    bf.innerHTML = [`<option value="all">All Batches</option>`, ...batches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)].join("");
-    if ([...bf.options].some(o => o.value === cur)) bf.value = cur;
-  }
-
-  const sbf = $("#statsBatchFilter");
-  if (sbf) {
-    const cur = sbf.value || "all";
-    sbf.innerHTML = [`<option value="all">All Batches</option>`, ...batches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)].join("");
-    if ([...sbf.options].some(o => o.value === cur)) sbf.value = cur;
-  }
-}
-
-function getInventoryListFiltered() {
+/** =======================
+ *  Filters (Inventory list)
+ *  ======================= */
+function getFilteredInventory() {
   const q = ($("#searchInput")?.value || "").trim().toLowerCase();
   const status = $("#statusFilter")?.value || "all";
   const condFilter = $("#conditionFilter")?.value || "all";
   const batchFilter = $("#batchFilter")?.value || "all";
 
-  const sm = saleMap();
-
-  return inventory.filter(inv => {
-    const sale = sm.get(inv.id);
-    const isSold = !!sale && !!sale.soldDate && toNum(sale.soldPrice) > 0;
-
-    if (status === "sold" && !isSold) return false;
-    if (status === "in_stock" && isSold) return false;
+  return allInv.filter((inv) => {
+    if (status !== "all" && (inv.status || "in_stock") !== status) return false;
 
     const c = normalizeCondition(inv.condition);
     if (condFilter !== "all" && c !== condFilter) return false;
@@ -610,107 +337,241 @@ function getInventoryListFiltered() {
     if (!q) return true;
 
     const hay = [
-      inv.name, inv.setNumber, inv.batch, inv.boughtFrom, inv.buyPayment,
-      sale?.soldOn, sale?.sellPayment, sale?.buyer, sale?.notes,
-      CONDITION_LABELS[c]
-    ].join(" ").toLowerCase();
+      inv.name,
+      inv.setNumber,
+      inv.batch,
+      inv.boughtFrom,
+      inv.buyPayment,
+      inv.status,
+      CONDITION_LABELS[c],
+    ]
+      .join(" ")
+      .toLowerCase();
 
     return hay.includes(q);
   });
 }
 
-function profitForSale(inv, sale) {
-  const revenue = toNum(sale?.soldPrice);
-  const purchase = toNum(inv?.purchaseCost);
-  const material = toNum(inv?.materialCost);
-  const shippingOut = toNum(sale?.fees); // fees field = fees + shipping out
-  const grossProfit = revenue - (purchase + material + shippingOut);
-  return { revenue, purchase, material, shippingOut, grossProfit };
+/** =======================
+ *  UI helpers
+ *  ======================= */
+function setPreview(imgEl, url) {
+  if (!imgEl) return;
+  const u = (url || "").trim();
+  if (!u) {
+    imgEl.removeAttribute("src");
+    imgEl.style.display = "none";
+  } else {
+    imgEl.src = u;
+    imgEl.style.display = "block";
+  }
 }
 
-function renderInventoryTable() {
-  const tb = $("#invTbody");
+/** =======================
+ *  Inventory UI (Add/Edit)
+ *  ======================= */
+function normalizeInvFormData(fd) {
+  const o = Object.fromEntries(fd.entries());
+  return {
+    id: o.id || uid(),
+    name: (o.name || "").trim(),
+    setNumber: (o.setNumber || "").trim(),
+    setImageUrl: (o.setImageUrl || "").trim(),
+    purchaseDate: o.purchaseDate || "",
+    batch: normalizeBatch(o.batch),
+    condition: normalizeCondition(o.condition),
+    boughtFrom: (o.boughtFrom || "").trim(),
+    buyPayment: (o.buyPayment || "").trim(),
+    purchaseCost: toNum(o.purchaseCost),
+    materialCost: toNum(o.materialCost),
+    boxIncluded: (o.boxIncluded || "yes"),
+    manualIncluded: (o.manualIncluded || "yes"),
+    status: (o.status || "in_stock"), // internal only
+    createdAt: o.createdAt ? toNum(o.createdAt) : Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+function setInvForm(inv) {
+  const f = $("#invForm");
+  if (!f) return;
+  f.id.value = inv?.id || "";
+  f.name.value = inv?.name || "";
+  f.setNumber.value = inv?.setNumber || "";
+  f.setImageUrl.value = inv?.setImageUrl || "";
+  f.purchaseDate.value = inv?.purchaseDate || "";
+  f.batch.value = inv?.batch || "";
+  f.condition.value = normalizeCondition(inv?.condition || "used_incomplete");
+  f.boughtFrom.value = inv?.boughtFrom || "";
+  f.buyPayment.value = inv?.buyPayment || "";
+  f.purchaseCost.value = inv?.purchaseCost ?? "";
+  f.materialCost.value = inv?.materialCost ?? 0;
+  f.boxIncluded.value = inv?.boxIncluded || "yes";
+  f.manualIncluded.value = inv?.manualIncluded || "yes";
+
+  setPreview($("#invPhotoPreview"), inv?.setImageUrl || "");
+  $("#invSaveBtn").textContent = inv?.id ? "Update Inventory" : "Save Inventory";
+}
+
+function resetInvForm() {
+  setInvForm(null);
+  $("#invSaveBtn").textContent = "Save Inventory";
+}
+
+/** =======================
+ *  Sales UI
+ *  ======================= */
+function normalizeSaleFormData(fd) {
+  const o = Object.fromEntries(fd.entries());
+  return {
+    id: o.saleId || uid(),
+    inventoryId: o.inventoryId || "",
+    soldDate: o.soldDate || "",
+    soldOn: (o.soldOn || "").trim(),
+    city: (o.city || "").trim(),
+    buyer: (o.buyer || "").trim(),
+    itemPrice: toNum(o.itemPrice),
+    shippingCharged: toNum(o.shippingCharged),
+    shippingPaid: toNum(o.shippingPaid),
+    platformFees: toNum(o.platformFees),
+    sellPayment: (o.sellPayment || "").trim(),
+    notes: (o.notes || "").trim(),
+    createdAt: o.createdAt ? toNum(o.createdAt) : Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+function setSaleForm(inv, sale) {
+  const f = $("#saleForm");
+  if (!f) return;
+
+  f.inventoryId.value = inv?.id || "";
+  f.saleId.value = sale?.id || "";
+
+  f.soldDate.value = sale?.soldDate || "";
+  f.soldOn.value = sale?.soldOn || "";
+  f.city.value = sale?.city || "";
+  f.buyer.value = sale?.buyer || "";
+
+  f.itemPrice.value = sale?.itemPrice ?? "";
+  f.shippingCharged.value = sale?.shippingCharged ?? 0;
+  f.shippingPaid.value = sale?.shippingPaid ?? 0;
+  f.platformFees.value = sale?.platformFees ?? 0;
+
+  f.sellPayment.value = sale?.sellPayment || "";
+  f.notes.value = sale?.notes || "";
+
+  $("#saleSaveBtn").textContent = sale?.id ? "Update Sale" : "Save Sale";
+  setPreview($("#salePhotoPreview"), inv?.setImageUrl || "");
+}
+
+function resetSaleForm() {
+  const f = $("#saleForm");
+  if (!f) return;
+  f.reset();
+  f.inventoryId.value = "";
+  f.saleId.value = "";
+  $("#saleSaveBtn").textContent = "Save Sale";
+  setPreview($("#salePhotoPreview"), "");
+}
+
+/** =======================
+ *  Trade UI
+ *  ======================= */
+const tradeSelected = new Set();
+
+function tradeSelectedCost() {
+  let sum = 0;
+  for (const id of tradeSelected) {
+    const inv = allInv.find((x) => x.id === id);
+    if (inv) sum += invTotalCost(inv);
+  }
+  return sum;
+}
+
+function updateTradeBadge() {
+  const b = $("#tradeTotalBadge");
+  if (b) b.textContent = `Selected Cost: ${money(tradeSelectedCost())}`;
+}
+
+function renderTradePickTable() {
+  const tb = $("#tradePickTbody");
   if (!tb) return;
-
-  const sm = saleMap();
-  const list = getInventoryListFiltered();
-
-  // Sort newest first by purchaseDate then updatedAt
-  const sorted = [...list].sort((a, b) => {
-    const ad = a.purchaseDate || "0000-00-00";
-    const bd = b.purchaseDate || "0000-00-00";
-    if (ad !== bd) return bd.localeCompare(ad);
-    return (b.updatedAt || 0) - (a.updatedAt || 0);
-  });
-
   tb.innerHTML = "";
+
+  const inStock = allInv.filter((i) => (i.status || "in_stock") === "in_stock");
+  const sorted = [...inStock].sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""));
+
   for (const inv of sorted) {
-    const sale = sm.get(inv.id) || null;
-    const isSold = !!sale && !!sale.soldDate && toNum(sale.soldPrice) > 0;
-
-    const { revenue, grossProfit } = profitForSale(inv, sale);
-    const title = `${inv.name || "(unnamed)"}${inv.setNumber ? ` • #${inv.setNumber}` : ""}`;
-    const statusBadge = isSold
-      ? `<span class="badge sold">✅ Sold</span>`
-      : `<span class="badge unsold">🕒 In Stock</span>`;
-
-    const cond = conditionBadge(inv.condition);
-    const batch = batchBadge(inv.batch);
-
-    const soldDate = sale?.soldDate || "—";
-    const soldOn = sale?.soldOn || "—";
-    const buyer = sale?.buyer || "—";
-    const notes = sale?.notes || "";
-
+    const checked = tradeSelected.has(inv.id);
     const tr = document.createElement("tr");
     tr.innerHTML = `
+      <td class="mono">
+        <input type="checkbox" data-trade-pick="${escapeHtml(inv.id)}" ${checked ? "checked" : ""} />
+      </td>
       <td>
-        <div style="display:flex;gap:10px;align-items:flex-start;">
-          ${renderItemThumb(inv.setImageUrl)}
-          <div style="display:flex;flex-direction:column;gap:6px;">
-            <div style="font-weight:900;">${escapeHtml(title)}</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-              ${statusBadge}
-              ${cond}
+        <div style="display:flex;gap:10px;align-items:center;">
+          ${renderThumb(inv.setImageUrl)}
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <div style="font-weight:900;">${escapeHtml(inv.name || "(unnamed)")}${inv.setNumber ? ` • #${escapeHtml(inv.setNumber)}` : ""}</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+              ${conditionBadge(inv.condition)}
               ${inv.boxIncluded === "yes" ? `<span class="badge">📦 Box</span>` : `<span class="badge">📭 No Box</span>`}
               ${inv.manualIncluded === "yes" ? `<span class="badge">📘 Manual</span>` : `<span class="badge">📄 No Manual</span>`}
-              ${normalizeBatch(inv.batch) ? batch : ""}
-              ${inv.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(inv.boughtFrom)}</span>` : ""}
-              ${inv.buyPayment ? `<span class="badge">💳 ${escapeHtml(inv.buyPayment)}</span>` : ""}
-              ${isSold && soldOn !== "—" ? `<span class="badge">🏷️ ${escapeHtml(soldOn)}</span>` : ""}
-              ${isSold && buyer !== "—" ? `<span class="badge">👤 ${escapeHtml(buyer)}</span>` : ""}
             </div>
-            ${isSold && notes ? `<div class="small">${escapeHtml(notes)}</div>` : ""}
           </div>
         </div>
       </td>
+      <td>${batchBadge(inv.batch)}</td>
+      <td class="mono">${money(invTotalCost(inv))}</td>
+    `;
+    tb.appendChild(tr);
+  }
 
-      <td class="mono">
-        <div>${escapeHtml(inv.purchaseDate || "—")}</div>
-        <div class="small">Buy: ${money(toNum(inv.purchaseCost))}</div>
-      </td>
+  updateTradeBadge();
+}
 
-      <td class="mono">
-        <div>${escapeHtml(soldDate)}</div>
-        <div class="small">${isSold ? `Fees: ${money(toNum(sale?.fees))}` : ""}</div>
-      </td>
+function setTradeFormDefaults() {
+  const f = $("#tradeForm");
+  if (!f) return;
+  f.reset();
+  f.setImageUrl.value = "";
+  setPreview($("#tradePhotoPreview"), "");
+  $("#tradeBtn").textContent = "Complete Trade";
+}
 
-      <td class="mono">${isSold ? money(revenue) : "—"}</td>
+/** =======================
+ *  Expenses UI
+ *  ======================= */
+function normalizeExpenseForm(fd) {
+  const o = Object.fromEntries(fd.entries());
+  return {
+    id: uid(),
+    amount: toNum(o.amount),
+    category: (o.category || "").trim(),
+    date: o.date || "",
+    note: (o.note || "").trim(),
+    createdAt: Date.now(),
+  };
+}
 
-      <td class="mono" style="font-weight:900;color:${grossProfit >= 0 ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)"};">
-        ${isSold ? money(grossProfit) : "—"}
-      </td>
+function renderExpensesTable(list) {
+  const tb = $("#expenseTbody");
+  if (!tb) return;
+  tb.innerHTML = "";
 
-      <td>${escapeHtml(soldOn)}</td>
-      <td>${escapeHtml(buyer)}</td>
-      <td>${cond}</td>
-      <td>${batch}</td>
+  const sorted = [...list].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
+  for (const e of sorted) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="mono">${escapeHtml(e.date || "—")}</td>
+      <td>${escapeHtml(e.category || "")}</td>
+      <td>${escapeHtml(e.note || "")}</td>
+      <td class="mono">${money(toNum(e.amount))}</td>
       <td>
         <div class="rowActions">
-          <button class="iconBtn" data-inv-edit="${inv.id}" title="Edit Inventory">✏️</button>
-          <button class="iconBtn" data-inv-sell="${inv.id}" title="${isSold ? "Edit Sale" : "Sell"}">🧾</button>
-          <button class="iconBtn" data-inv-del="${inv.id}" title="Delete Inventory (and sale)">🗑️</button>
+          <button class="iconBtn" data-exp-del="${escapeHtml(e.id)}" title="Delete">🗑️</button>
         </div>
       </td>
     `;
@@ -718,987 +579,1354 @@ function renderInventoryTable() {
   }
 }
 
-async function handleInventoryTableClick(ev) {
-  const editId = ev.target?.getAttribute?.("data-inv-edit");
-  const sellId = ev.target?.getAttribute?.("data-inv-sell");
-  const delId = ev.target?.getAttribute?.("data-inv-del");
-  if (!editId && !sellId && !delId) return;
+function renderExpenseSummary(list) {
+  const el = $("#expenseSummary");
+  if (!el) return;
 
-  if (editId) {
-    const item = inventory.find(x => x.id === editId);
-    if (!item) return;
-    fillInventoryForm(item);
-    setActiveView("viewInventory");
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    return;
+  const totals = new Map();
+  for (const e of list) {
+    const cat = (e.category || "Other").trim() || "Other";
+    totals.set(cat, (totals.get(cat) || 0) + toNum(e.amount));
   }
 
-  if (sellId) {
-    const inv = inventory.find(x => x.id === sellId);
-    if (!inv) return;
-    const sale = await txGetSaleByInventoryId(inv.id);
-    fillSaleForm(inv, sale);
-    setActiveView("viewSell");
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    return;
-  }
+  const rows = [...totals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([cat, amt]) => `<span class="badge">${escapeHtml(cat)}: <span class="mono">${money(amt)}</span></span>`)
+    .join(" ");
 
-  if (delId) {
-    const inv = inventory.find(x => x.id === delId);
-    if (!inv) return;
-    const ok = confirm(`Delete "${inv.name}"? This also deletes its sale (if any).`);
-    if (!ok) return;
+  el.innerHTML = rows || `<span class="small">No expenses yet.</span>`;
+}
 
-    // delete sale (if exists) then inventory
-    const existingSale = await txGetSaleByInventoryId(inv.id);
-    if (existingSale) await txDelete(SALES_STORE, existingSale.id);
-    await txDelete(INVENTORY_STORE, inv.id);
+/** =======================
+ *  Inventory list rendering
+ *  ======================= */
+function computeInvSaleSnapshot(inv) {
+  const sale = allSales.find((s) => s.inventoryId === inv.id) || null;
+  const sold = (inv.status || "in_stock") === "sold" && sale;
+  const revenue = sold ? saleRevenue(sale) : 0;
 
-    inventory = await txGetAll(INVENTORY_STORE);
-    sales = await txGetAll(SALES_STORE);
-    toast("Deleted 🗑️");
-    rerenderAll();
+  // direct profit (no overhead allocation)
+  const directProfit = sold ? revenue - saleDirectCosts(inv, sale) : 0;
+
+  return { sale, sold, revenue, directProfit };
+}
+
+function renderInventoryTable(list) {
+  const tb = $("#invTbody");
+  if (!tb) return;
+  tb.innerHTML = "";
+
+  const sorted = [...list].sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""));
+
+  for (const inv of sorted) {
+    const { sale, sold, revenue, directProfit } = computeInvSaleSnapshot(inv);
+
+    const status = inv.status || "in_stock";
+    const statusBadge =
+      status === "sold"
+        ? `<span class="badge sold">✅ Sold</span>`
+        : status === "exchanged"
+        ? `<span class="badge">🔁 Exchanged</span>`
+        : `<span class="badge unsold">🕒 In Stock</span>`;
+
+    const tr = document.createElement("tr");
+
+    tr.innerHTML = `
+      <td>
+        <div style="display:flex;gap:10px;align-items:center;">
+          ${renderThumb(inv.setImageUrl)}
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <div style="font-weight:900;">${escapeHtml(inv.name || "(unnamed)")}${inv.setNumber ? ` • #${escapeHtml(inv.setNumber)}` : ""}</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+              ${statusBadge}
+              ${conditionBadge(inv.condition)}
+              ${normalizeBatch(inv.batch) ? batchBadge(inv.batch) : ""}
+              ${inv.boxIncluded === "yes" ? `<span class="badge">📦 Box</span>` : `<span class="badge">📭 No Box</span>`}
+              ${inv.manualIncluded === "yes" ? `<span class="badge">📘 Manual</span>` : `<span class="badge">📄 No Manual</span>`}
+              ${inv.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(inv.boughtFrom)}</span>` : ""}
+              ${inv.buyPayment ? `<span class="badge">💳 ${escapeHtml(inv.buyPayment)}</span>` : ""}
+              ${sale?.buyer ? `<span class="badge">👤 ${escapeHtml(sale.buyer)}</span>` : ""}
+            </div>
+            ${
+              sale?.notes
+                ? `<div class="small">${escapeHtml(sale.notes)}</div>`
+                : ""
+            }
+          </div>
+        </div>
+      </td>
+
+      <td class="mono">
+        <div>${escapeHtml(inv.purchaseDate || "—")}</div>
+        <div class="small">Cost: ${money(invTotalCost(inv))}</div>
+      </td>
+
+      <td class="mono">${escapeHtml(sale?.soldDate || "—")}</td>
+      <td class="mono">${sold ? money(revenue) : "—"}</td>
+      <td class="mono" style="font-weight:900;color:${sold ? (directProfit >= 0 ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)") : "inherit"};">
+        ${sold ? money(directProfit) : "—"}
+      </td>
+
+      <td>${escapeHtml(sale?.soldOn || "—")}</td>
+      <td>${escapeHtml(sale?.city || "—")}</td>
+      <td>${conditionBadge(inv.condition)}</td>
+      <td>${batchBadge(inv.batch)}</td>
+
+      <td>
+        <div class="rowActions">
+          <button class="iconBtn" data-inv-edit="${escapeHtml(inv.id)}" title="Edit Inventory">✏️</button>
+          <button class="iconBtn" data-inv-sell="${escapeHtml(inv.id)}" title="Sell / Edit Sale">🧾</button>
+          <button class="iconBtn" data-inv-del="${escapeHtml(inv.id)}" title="Delete">🗑️</button>
+        </div>
+      </td>
+    `;
+
+    tb.appendChild(tr);
   }
 }
 
-/** ---------- Inventory datalist for Sell tab ---------- */
-function renderInventoryDatalist() {
+/** =======================
+ *  Batch UI updates
+ *  ======================= */
+function updateBatchUI() {
+  const batches = [...new Set(allInv.map((x) => normalizeBatch(x.batch)).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b)
+  );
+
+  const dl = $("#batchList");
+  if (dl) dl.innerHTML = batches.map((b) => `<option value="${escapeHtml(b)}"></option>`).join("");
+
+  const bf = $("#batchFilter");
+  if (bf) {
+    const current = bf.value || "all";
+    bf.innerHTML = `<option value="all">All Batches</option>` + batches.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join("");
+    bf.value = [...bf.options].some((o) => o.value === current) ? current : "all";
+  }
+
+  const sbf = $("#statsBatchFilter");
+  if (sbf) {
+    const current = sbf.value || "all";
+    sbf.innerHTML = `<option value="all">All Batches</option>` + batches.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join("");
+    sbf.value = [...sbf.options].some((o) => o.value === current) ? current : "all";
+  }
+}
+
+/** =======================
+ *  Sell picker (unsold only)
+ *  ======================= */
+function updateUnsoldPicker() {
   const dl = $("#inventoryList");
   if (!dl) return;
 
-  // show BOTH in-stock and sold, because user needs to edit sold items too
-  // Use a display label that can be typed easily.
-  const items = [...inventory].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-  dl.innerHTML = items.map(inv => {
-    const label = `${inv.name || "(unnamed)"}${inv.setNumber ? ` • #${inv.setNumber}` : ""}`;
-    // store id in data attribute not supported by datalist option; we map later by label
-    return `<option value="${escapeHtml(label)}"></option>`;
-  }).join("");
-}
-function findInventoryByPickValue(v) {
-  const val = (v || "").trim();
-  if (!val) return null;
+  const unsold = allInv.filter((x) => (x.status || "in_stock") === "in_stock");
+  const options = unsold
+    .slice()
+    .sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""))
+    .map((inv) => {
+      const label = `${inv.name || "(unnamed)"}${inv.setNumber ? ` • #${inv.setNumber}` : ""} • ${inv.id}`;
+      return `<option value="${escapeHtml(label)}"></option>`;
+    })
+    .join("");
 
-  // Try exact label match first
-  const exact = inventory.find(inv => {
-    const label = `${inv.name || "(unnamed)"}${inv.setNumber ? ` • #${inv.setNumber}` : ""}`;
-    return label === val;
-  });
-  if (exact) return exact;
-
-  // Fallback: if user typed set number
-  const s = val.replace("#", "").trim();
-  const bySet = inventory.find(inv => (inv.setNumber || "").trim() === s);
-  if (bySet) return bySet;
-
-  // Fallback: substring in name
-  const low = val.toLowerCase();
-  return inventory.find(inv => (inv.name || "").toLowerCase().includes(low)) || null;
+  dl.innerHTML = options;
 }
 
-/** ---------- Stats (Deep) ---------- */
-let charts = {
-  profitLine: null,
-  revProfitCombo: null,
-  marketBar: null,
-  marketRevenueBar: null,
-  conditionBar: null,
-  sellThroughCond: null,
-  batchBar: null,
-  batchSpendRev: null,
-  buyerBar: null,
-  feesLine: null
-};
+function parsePickValueToId(v) {
+  // value ends with " • <id>"
+  const s = (v || "").trim();
+  const parts = s.split(" • ");
+  const last = parts[parts.length - 1];
+  if (last && last.startsWith("id_")) return last;
+  // crypto uuid
+  if (last && /^[0-9a-f-]{16,}$/i.test(last)) return last;
+  return "";
+}
 
-function getStatsRangeFilter() {
-  const v = $("#statsRange")?.value || "all";
+/** =======================
+ *  Stats (allocation + charts)
+ *  ======================= */
+function statsRangeFilter(sales) {
+  const range = $("#statsRange")?.value || "all";
+  if (range === "all") return sales;
+
   const now = new Date();
-  const today = Date.parse(`${todayStr()}T00:00:00`);
+  let start = null;
 
-  if (v === "30d") return { fromMs: today - 29 * 86400000, toMs: today + 86400000 };
-  if (v === "90d") return { fromMs: today - 89 * 86400000, toMs: today + 86400000 };
-  if (v === "ytd") {
-    const y = now.getFullYear();
-    const fromMs = Date.parse(`${y}-01-01T00:00:00`);
-    return { fromMs, toMs: today + 86400000 };
-  }
-  return { fromMs: -Infinity, toMs: Infinity };
-}
-function inRange(dateStr, range) {
-  const ms = parseDateMs(dateStr);
-  if (!Number.isFinite(ms)) return false;
-  return ms >= range.fromMs && ms < range.toMs;
-}
-
-function mapExpenseToBucket(category) {
-  const c = (category || "").toLowerCase();
-  if (c.includes("shipping")) return "shipping";
-  if (c.includes("suppl") || c.includes("parts")) return "material";
-  // gas / fees(other) / other => other
-  return "other";
-}
-
-function allocateOverhead(overheadTotal, revenueByKeyMap) {
-  const totalRev = [...revenueByKeyMap.values()].reduce((a, b) => a + b, 0);
-  const alloc = new Map();
-  for (const [k, rev] of revenueByKeyMap.entries()) {
-    const share = totalRev > 0 ? (rev / totalRev) : 0;
-    alloc.set(k, overheadTotal * share);
-  }
-  return alloc;
-}
-
-function rerenderStats() {
-  if (!$("#viewStats")) return;
-  if (!window.Chart) return;
-
-  const sm = saleMap();
-  const range = getStatsRangeFilter();
-  const batchPick = $("#statsBatchFilter")?.value || "all";
-
-  // Build sale records joined with inventory, filtered
-  const soldRows = [];
-  const unsoldRows = [];
-
-  for (const inv of inventory) {
-    if (batchPick !== "all" && normalizeBatch(inv.batch) !== batchPick) continue;
-    const sale = sm.get(inv.id);
-    if (sale && sale.soldDate && toNum(sale.soldPrice) > 0) {
-      // stats date filter uses soldDate
-      if (!inRange(sale.soldDate, range)) continue;
-      soldRows.push({ inv, sale });
-    } else {
-      unsoldRows.push(inv);
-    }
+  if (range === "30d") {
+    start = new Date(now);
+    start.setDate(start.getDate() - 30);
+  } else if (range === "90d") {
+    start = new Date(now);
+    start.setDate(start.getDate() - 90);
+  } else if (range === "ytd") {
+    start = new Date(now.getFullYear(), 0, 1);
   }
 
-  // Expenses in range (use expense date)
-  const expInRange = expenses.filter(e => inRange(e.date, range));
+  if (!start) return sales;
+  const startStr = start.toISOString().slice(0, 10);
 
-  // Totals (sold-only for revenue/cogs/material/shippingOut)
+  return sales.filter((s) => (s.soldDate || "") >= startStr);
+}
+
+function statsBatchFilterSales(sales) {
+  const b = $("#statsBatchFilter")?.value || "all";
+  if (b === "all") return sales;
+  return sales.filter((s) => {
+    const inv = allInv.find((x) => x.id === s.inventoryId);
+    return normalizeBatch(inv?.batch) === b;
+  });
+}
+
+function sumExpensesByType(expenses, salesInScope) {
+  // Expense allocation over current filtered sales only (by revenue share)
+  // Categories -> buckets
+  // Supplies + Parts => material overhead
+  // Shipping => shipping overhead
+  // Gas + Fees(other) + Other => other overhead
+
+  const totals = { material: 0, shipping: 0, other: 0 };
+
+  for (const e of expenses) {
+    const cat = (e.category || "").trim();
+    const amt = toNum(e.amount);
+    if (!amt) continue;
+
+    if (cat === "Supplies" || cat === "Parts") totals.material += amt;
+    else if (cat === "Shipping") totals.shipping += amt;
+    else totals.other += amt;
+  }
+
+  // Allocation weights by revenue across salesInScope
+  const revBySaleId = new Map();
+  let totalRev = 0;
+  for (const s of salesInScope) {
+    const inv = allInv.find((x) => x.id === s.inventoryId);
+    if (!inv || (inv.status || "in_stock") !== "sold") continue;
+    const rev = saleRevenue(s);
+    totalRev += rev;
+    revBySaleId.set(s.id, rev);
+  }
+
+  return { totals, revBySaleId, totalRev: totalRev || 0.00001 };
+}
+
+function computeSaleNet(inv, sale, alloc) {
+  const revenue = saleRevenue(sale);
+  const direct = saleDirectCosts(inv, sale);
+
+  const w = (alloc.revBySaleId.get(sale.id) || 0) / alloc.totalRev;
+  const allocMaterial = alloc.totals.material * w;
+  const allocShipping = alloc.totals.shipping * w;
+  const allocOther = alloc.totals.other * w;
+
+  const netProfit = revenue - direct - allocMaterial - allocShipping - allocOther;
+
+  return {
+    revenue,
+    directCosts: direct,
+    allocMaterial,
+    allocShipping,
+    allocOther,
+    netProfit,
+  };
+}
+
+function renderStats() {
+  // Only consider SOLD inventory for profit/revenue stats; EXCHANGED excluded by status
+  const soldInvIds = new Set(allInv.filter((i) => (i.status || "in_stock") === "sold").map((i) => i.id));
+  let sales = allSales.filter((s) => soldInvIds.has(s.inventoryId));
+
+  sales = statsRangeFilter(sales);
+  sales = statsBatchFilterSales(sales);
+
+  const alloc = sumExpensesByType(allExpenses, sales);
+
   let revenue = 0;
-  let purchase = 0;
-  let material = 0;
-  let shippingOut = 0;
-  let grossProfit = 0;
+  let purchaseCost = 0;
+  let materialCost = 0;
+  let shippingTotal = 0;
+  let otherOverhead = 0;
+  let netProfit = 0;
 
-  // For average days
   let totalDays = 0;
   let daysCount = 0;
 
-  // Groupings
-  const profitByMonthGross = new Map();
-  const revenueByMonth = new Map();
-  const feesByMonth = new Map();
+  for (const s of sales) {
+    const inv = allInv.find((x) => x.id === s.inventoryId);
+    if (!inv) continue;
 
-  const profitByMarketGross = new Map();
-  const revenueByMarket = new Map();
+    const purchase = toNum(inv.purchaseCost);
+    const material = toNum(inv.materialCost);
+    const shipPaid = toNum(s.shippingPaid);
+    const platformFees = toNum(s.platformFees);
 
-  const profitByCondGross = new Map();
-  const soldCountByCond = new Map();
-  const totalCountByCond = new Map();
+    const net = computeSaleNet(inv, s, alloc);
 
-  const profitByBatchGross = new Map();
-  const revenueByBatch = new Map();
-  const spendByBatch = new Map();
+    revenue += net.revenue;
+    purchaseCost += purchase;
+    materialCost += material + net.allocMaterial; // show overhead supplies/parts inside material bucket
+    shippingTotal += shipPaid + platformFees + net.allocShipping; // shipping-ish bucket includes fees + shipping + shipping-expenses
+    otherOverhead += net.allocOther;
+    netProfit += net.netProfit;
 
-  const revenueByBuyer = new Map();
-  const profitByBuyerGross = new Map();
-
-  // Total count by condition (includes unsold filtered by batch)
-  for (const inv of [...soldRows.map(r => r.inv), ...unsoldRows]) {
-    const c = normalizeCondition(inv.condition);
-    totalCountByCond.set(c, (totalCountByCond.get(c) || 0) + 1);
-  }
-
-  for (const { inv, sale } of soldRows) {
-    const p = profitForSale(inv, sale);
-    revenue += p.revenue;
-    purchase += p.purchase;
-    material += p.material;
-    shippingOut += p.shippingOut;
-    grossProfit += p.grossProfit;
-
-    // days to sell
-    const d = daysBetween(inv.purchaseDate, sale.soldDate);
-    if (d !== null) { totalDays += d; daysCount++; }
-
-    // month
-    const m = ym(sale.soldDate);
-    if (m) {
-      profitByMonthGross.set(m, (profitByMonthGross.get(m) || 0) + p.grossProfit);
-      revenueByMonth.set(m, (revenueByMonth.get(m) || 0) + p.revenue);
-      feesByMonth.set(m, (feesByMonth.get(m) || 0) + p.shippingOut);
-    }
-
-    // market
-    const market = (sale.soldOn || "").trim() || "Unknown";
-    profitByMarketGross.set(market, (profitByMarketGross.get(market) || 0) + p.grossProfit);
-    revenueByMarket.set(market, (revenueByMarket.get(market) || 0) + p.revenue);
-
-    // condition
-    const c = normalizeCondition(inv.condition);
-    profitByCondGross.set(c, (profitByCondGross.get(c) || 0) + p.grossProfit);
-    soldCountByCond.set(c, (soldCountByCond.get(c) || 0) + 1);
-
-    // batch
-    const b = normalizeBatch(inv.batch) || "No Batch";
-    profitByBatchGross.set(b, (profitByBatchGross.get(b) || 0) + p.grossProfit);
-    revenueByBatch.set(b, (revenueByBatch.get(b) || 0) + p.revenue);
-    spendByBatch.set(b, (spendByBatch.get(b) || 0) + (p.purchase + p.material + p.shippingOut));
-
-    // buyer
-    const buyer = (sale.buyer || "").trim() || "Unknown";
-    revenueByBuyer.set(buyer, (revenueByBuyer.get(buyer) || 0) + p.revenue);
-    profitByBuyerGross.set(buyer, (profitByBuyerGross.get(buyer) || 0) + p.grossProfit);
-  }
-
-  // Overhead buckets from expenses in range
-  let overheadMaterial = 0;
-  let overheadShipping = 0;
-  let overheadOther = 0;
-
-  const overheadByMonth = new Map();
-  const overheadShippingByMonth = new Map();
-
-  for (const e of expInRange) {
-    const amt = toNum(e.amount);
-    const bucket = mapExpenseToBucket(e.category);
-    if (bucket === "material") overheadMaterial += amt;
-    else if (bucket === "shipping") overheadShipping += amt;
-    else overheadOther += amt;
-
-    const m = ym(e.date);
-    if (m) {
-      overheadByMonth.set(m, (overheadByMonth.get(m) || 0) + amt);
-      if (bucket === "shipping") overheadShippingByMonth.set(m, (overheadShippingByMonth.get(m) || 0) + amt);
+    const d = daysBetween(inv.purchaseDate, s.soldDate);
+    if (d !== null) {
+      totalDays += d;
+      daysCount++;
     }
   }
 
-  const overheadTotal = overheadMaterial + overheadShipping + overheadOther;
+  const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+  const avgProfit = sales.length ? netProfit / sales.length : 0;
 
-  // Net profit totals
-  const netProfit = grossProfit - overheadTotal;
-  const netMargin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
-  const avgProfit = soldRows.length ? (netProfit / soldRows.length) : 0;
+  // Unsold invested
+  const unsold = allInv.filter((i) => (i.status || "in_stock") === "in_stock");
+  const investedUnsold = unsold.reduce((sum, inv) => sum + invTotalCost(inv), 0);
 
-  // Invested unsold
-  let investedUnsold = 0;
-  for (const inv of unsoldRows) {
-    investedUnsold += toNum(inv.purchaseCost) + toNum(inv.materialCost);
+  const sellThrough = (allInv.filter((i) => (i.status || "in_stock") === "sold").length / Math.max(1, allInv.filter((i) => (i.status || "in_stock") !== "exchanged").length)) * 100;
+  const avgDays = daysCount ? Math.round(totalDays / daysCount) : 0;
+
+  $("#kpiRevenue").textContent = money(revenue);
+  $("#kpiPurchase").textContent = money(purchaseCost);
+  $("#kpiMaterial").textContent = money(materialCost);
+  $("#kpiShipping").textContent = money(shippingTotal);
+  $("#kpiOther").textContent = money(otherOverhead);
+  $("#kpiProfit").textContent = money(netProfit);
+  $("#kpiMargin").textContent = pct(margin);
+  $("#kpiAvgProfit").textContent = money(avgProfit);
+  $("#kpiInvestedUnsold").textContent = money(investedUnsold);
+  $("#kpiUnsoldCount").textContent = String(unsold.length);
+  $("#kpiSellThrough").textContent = pct(sellThrough);
+  $("#kpiAvgDays").textContent = String(avgDays);
+
+  renderCharts(sales, alloc);
+}
+
+function destroyChart(key) {
+  if (charts[key]) {
+    charts[key].destroy();
+    charts[key] = null;
+  }
+}
+
+function renderCharts(sales, alloc) {
+  if (!window.Chart) return;
+
+  // build net results per sale
+  const rows = [];
+  for (const s of sales) {
+    const inv = allInv.find((x) => x.id === s.inventoryId);
+    if (!inv) continue;
+    rows.push({ inv, sale: s, net: computeSaleNet(inv, s, alloc) });
   }
 
-  // sell-through
-  const totalItems = soldRows.length + unsoldRows.length;
-  const sellThrough = totalItems > 0 ? (soldRows.length / totalItems) * 100 : 0;
+  // Profit over time (month)
+  const profitByMonth = new Map();
+  const revByMonth = new Map();
+  const feesShipByMonth = new Map();
 
-  // avg days
-  const avgDays = daysCount ? (totalDays / daysCount) : 0;
-
-  // KPIs
-  $("#kpiRevenue") && ($("#kpiRevenue").textContent = money(revenue));
-  $("#kpiPurchase") && ($("#kpiPurchase").textContent = money(purchase));
-  $("#kpiMaterial") && ($("#kpiMaterial").textContent = money(material + overheadMaterial));
-  $("#kpiShipping") && ($("#kpiShipping").textContent = money(shippingOut + overheadShipping));
-  $("#kpiOther") && ($("#kpiOther").textContent = money(overheadOther));
-  $("#kpiProfit") && ($("#kpiProfit").textContent = money(netProfit));
-  $("#kpiMargin") && ($("#kpiMargin").textContent = pct(netMargin));
-  $("#kpiAvgProfit") && ($("#kpiAvgProfit").textContent = money(avgProfit));
-
-  $("#kpiInvestedUnsold") && ($("#kpiInvestedUnsold").textContent = money(investedUnsold));
-  $("#kpiUnsoldCount") && ($("#kpiUnsoldCount").textContent = String(unsoldRows.length));
-  $("#kpiSellThrough") && ($("#kpiSellThrough").textContent = pct(sellThrough));
-  $("#kpiAvgDays") && ($("#kpiAvgDays").textContent = String(avgDays ? avgDays.toFixed(0) : 0));
-
-  // Build month axis
-  const months = [...new Set([...profitByMonthGross.keys(), ...overheadByMonth.keys(), ...revenueByMonth.keys()])].sort();
-  const grossByMonth = months.map(m => profitByMonthGross.get(m) || 0);
-  const overheadByMonthArr = months.map(m => overheadByMonth.get(m) || 0);
-  const netByMonth = months.map((m, i) => (profitByMonthGross.get(m) || 0) - (overheadByMonthArr[i] || 0));
-  const revByMonthArr = months.map(m => revenueByMonth.get(m) || 0);
-
-  // Fees+shipping over time = sale fees + expense shipping
-  const shippingExpByMonthArr = months.map(m => overheadShippingByMonth.get(m) || 0);
-  const feesSaleByMonthArr = months.map(m => feesByMonth.get(m) || 0);
-  const feesTotalByMonthArr = months.map((m, i) => (feesSaleByMonthArr[i] || 0) + (shippingExpByMonthArr[i] || 0));
-
-  // Market alloc overhead by revenue share
-  const marketOverheadAlloc = allocateOverhead(overheadTotal, revenueByMarket);
-  const marketsTopProfit = [...profitByMarketGross.entries()]
-    .map(([k, gp]) => [k, gp - (marketOverheadAlloc.get(k) || 0)])
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10);
-  const marketProfitLabels = marketsTopProfit.map(([k]) => k);
-  const marketProfitVals = marketsTopProfit.map(([, v]) => v);
-
-  const marketsTopRevenue = [...revenueByMarket.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const marketRevLabels = marketsTopRevenue.map(([k]) => k);
-  const marketRevVals = marketsTopRevenue.map(([, v]) => v);
-
-  // Condition profit (net-allocated by revenue share within condition)
-  const revenueByCond = new Map();
-  for (const { inv, sale } of soldRows) {
-    const c = normalizeCondition(inv.condition);
-    revenueByCond.set(c, (revenueByCond.get(c) || 0) + toNum(sale.soldPrice));
+  for (const r of rows) {
+    const k = ym(r.sale.soldDate);
+    if (!k) continue;
+    profitByMonth.set(k, (profitByMonth.get(k) || 0) + r.net.netProfit);
+    revByMonth.set(k, (revByMonth.get(k) || 0) + r.net.revenue);
+    feesShipByMonth.set(k, (feesShipByMonth.get(k) || 0) + toNum(r.sale.shippingPaid) + toNum(r.sale.platformFees));
   }
-  const condOverheadAlloc = allocateOverhead(overheadTotal, revenueByCond);
+
+  const months = [...profitByMonth.keys()].sort();
+  const profitVals = months.map((m) => profitByMonth.get(m) || 0);
+  const revVals = months.map((m) => revByMonth.get(m) || 0);
+  const feesShipVals = months.map((m) => feesShipByMonth.get(m) || 0);
+
+  // Profit by marketplace + revenue by marketplace
+  const profitByMarket = new Map();
+  const revByMarket = new Map();
+  for (const r of rows) {
+    const mk = (r.sale.soldOn || "Unknown").trim() || "Unknown";
+    profitByMarket.set(mk, (profitByMarket.get(mk) || 0) + r.net.netProfit);
+    revByMarket.set(mk, (revByMarket.get(mk) || 0) + r.net.revenue);
+  }
+  const marketTop = [...profitByMarket.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const marketLabels = marketTop.map(([k]) => k);
+  const marketProfitVals = marketLabels.map((k) => profitByMarket.get(k) || 0);
+  const marketRevVals = marketLabels.map((k) => revByMarket.get(k) || 0);
+
+  // Profit by city
+  const profitByCity = new Map();
+  for (const r of rows) {
+    const city = (r.sale.city || "Unknown").trim() || "Unknown";
+    profitByCity.set(city, (profitByCity.get(city) || 0) + r.net.netProfit);
+  }
+  const cityTop = [...profitByCity.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const cityLabels = cityTop.map(([k]) => k);
+  const cityVals = cityLabels.map((k) => profitByCity.get(k) || 0);
+
+  // Profit by condition
+  const profitByCond = new Map();
+  const soldByCond = new Map();
+  for (const r of rows) {
+    const c = normalizeCondition(r.inv.condition);
+    profitByCond.set(c, (profitByCond.get(c) || 0) + r.net.netProfit);
+    soldByCond.set(c, (soldByCond.get(c) || 0) + 1);
+  }
   const condOrder = ["new_sealed", "new_openbox", "used_complete", "used_incomplete"];
-  const condLabels = condOrder.map(k => CONDITION_LABELS[k]);
-  const condProfitVals = condOrder.map(k => (profitByCondGross.get(k) || 0) - (condOverheadAlloc.get(k) || 0));
+  const condLabels = condOrder.map((k) => CONDITION_LABELS[k]);
+  const condProfitVals = condOrder.map((k) => profitByCond.get(k) || 0);
 
   // Sell-through by condition
-  const condSellThrough = condOrder.map(k => {
-    const soldC = soldCountByCond.get(k) || 0;
-    const totalC = totalCountByCond.get(k) || 0;
-    return totalC ? (soldC / totalC) * 100 : 0;
+  const invCountByCond = new Map();
+  for (const inv of allInv) {
+    if ((inv.status || "in_stock") === "exchanged") continue;
+    const c = normalizeCondition(inv.condition);
+    invCountByCond.set(c, (invCountByCond.get(c) || 0) + 1);
+  }
+  const sellThroughVals = condOrder.map((k) => {
+    const sold = soldByCond.get(k) || 0;
+    const total = invCountByCond.get(k) || 0;
+    return total ? (sold / total) * 100 : 0;
   });
 
-  // Batch profit / spent vs revenue
-  const batchOverheadAlloc = allocateOverhead(overheadTotal, revenueByBatch);
-  const batchesTop = [...profitByBatchGross.entries()]
-    .map(([k, gp]) => [k, gp - (batchOverheadAlloc.get(k) || 0)])
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10);
-  const batchLabels = batchesTop.map(([k]) => k);
-  const batchProfitVals = batchesTop.map(([, v]) => v);
+  // Profit by batch and spent vs revenue by batch
+  const profitByBatch = new Map();
+  const spentByBatch = new Map();
+  const revByBatch = new Map();
+  for (const r of rows) {
+    const b = normalizeBatch(r.inv.batch) || "No Batch";
+    profitByBatch.set(b, (profitByBatch.get(b) || 0) + r.net.netProfit);
+    spentByBatch.set(b, (spentByBatch.get(b) || 0) + invTotalCost(r.inv));
+    revByBatch.set(b, (revByBatch.get(b) || 0) + r.net.revenue);
+  }
+  const batchTop = [...profitByBatch.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const batchLabels = batchTop.map(([k]) => k);
+  const batchProfitVals = batchLabels.map((k) => profitByBatch.get(k) || 0);
+  const batchSpentVals = batchLabels.map((k) => spentByBatch.get(k) || 0);
+  const batchRevVals = batchLabels.map((k) => revByBatch.get(k) || 0);
 
-  const batchSpendRevTop = [...revenueByBatch.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const batchSpendLabels = batchSpendRevTop.map(([k]) => k);
-  const batchRevVals = batchSpendLabels.map(k => revenueByBatch.get(k) || 0);
-  const batchSpendVals = batchSpendLabels.map(k => spendByBatch.get(k) || 0);
-
-  // Buyer breakdown (top 10 by revenue)
-  const buyerTop = [...revenueByBuyer.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const buyerLabels = buyerTop.map(([k]) => k);
-  const buyerVals = buyerTop.map(([, v]) => v);
-
-  // Chart options
   const common = { color: "#e5edff", grid: "rgba(255,255,255,0.08)" };
-  const destroy = (k) => { if (charts[k]) { charts[k].destroy(); charts[k] = null; } };
 
-  // Net Profit Over Time
+  // Profit line
   const profitLineEl = $("#profitLine");
   if (profitLineEl) {
-    destroy("profitLine");
+    destroyChart("profitLine");
     charts.profitLine = new Chart(profitLineEl.getContext("2d"), {
       type: "line",
       data: {
         labels: months.length ? months : ["—"],
-        datasets: [{
-          label: "Net Profit",
-          data: months.length ? netByMonth : [0],
-          borderColor: "rgba(34,197,94,0.95)",
-          backgroundColor: "rgba(34,197,94,0.20)",
-          fill: true,
-          tension: 0.25,
-          pointRadius: 3
-        }]
+        datasets: [
+          {
+            label: "Net Profit",
+            data: months.length ? profitVals : [0],
+            borderColor: "rgba(34,197,94,0.95)",
+            backgroundColor: "rgba(34,197,94,0.20)",
+            fill: true,
+            tension: 0.25,
+            pointRadius: 3,
+          },
+        ],
       },
       options: {
         responsive: true,
         plugins: {
           legend: { labels: { color: common.color } },
-          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } }
+          tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } },
         },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
+      },
     });
   }
 
-  // Revenue vs Profit Combo
+  // Revenue vs Profit combo
   const comboEl = $("#revProfitCombo");
   if (comboEl) {
-    destroy("revProfitCombo");
+    destroyChart("revProfitCombo");
     charts.revProfitCombo = new Chart(comboEl.getContext("2d"), {
-      type: "bar",
       data: {
         labels: months.length ? months : ["—"],
         datasets: [
           {
             type: "bar",
             label: "Revenue",
-            data: months.length ? revByMonthArr : [0],
+            data: months.length ? revVals : [0],
             backgroundColor: "rgba(59,130,246,0.35)",
             borderColor: "rgba(255,255,255,0.18)",
-            borderWidth: 1
+            borderWidth: 1,
+            yAxisID: "y",
           },
           {
             type: "line",
             label: "Net Profit",
-            data: months.length ? netByMonth : [0],
+            data: months.length ? profitVals : [0],
             borderColor: "rgba(34,197,94,0.95)",
-            backgroundColor: "rgba(34,197,94,0.15)",
+            backgroundColor: "rgba(34,197,94,0.20)",
             tension: 0.25,
             pointRadius: 3,
-            fill: false
-          }
-        ]
+            yAxisID: "y",
+          },
+        ],
       },
       options: {
         responsive: true,
         plugins: { legend: { labels: { color: common.color } } },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
+      },
     });
   }
 
-  // Profit by Marketplace
+  // Profit by marketplace
   const marketEl = $("#marketBar");
   if (marketEl) {
-    destroy("marketBar");
+    destroyChart("marketBar");
     charts.marketBar = new Chart(marketEl.getContext("2d"), {
       type: "bar",
       data: {
-        labels: marketProfitLabels.length ? marketProfitLabels : ["—"],
-        datasets: [{
-          label: "Profit (Net Alloc.)",
-          data: marketProfitLabels.length ? marketProfitVals : [0],
-          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)",
-          borderColor: "rgba(255,255,255,0.18)",
-          borderWidth: 1
-        }]
+        labels: marketLabels.length ? marketLabels : ["—"],
+        datasets: [
+          {
+            label: "Net Profit",
+            data: marketLabels.length ? marketProfitVals : [0],
+            backgroundColor: (ctx) => ((ctx.raw ?? 0) >= 0 ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)"),
+            borderColor: "rgba(255,255,255,0.18)",
+            borderWidth: 1,
+          },
+        ],
       },
       options: {
         responsive: true,
         plugins: { legend: { labels: { color: common.color } } },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
+      },
     });
   }
 
-  // Revenue by Marketplace
+  // Revenue by marketplace
   const marketRevEl = $("#marketRevenueBar");
   if (marketRevEl) {
-    destroy("marketRevenueBar");
+    destroyChart("marketRevenueBar");
     charts.marketRevenueBar = new Chart(marketRevEl.getContext("2d"), {
       type: "bar",
       data: {
-        labels: marketRevLabels.length ? marketRevLabels : ["—"],
-        datasets: [{
-          label: "Revenue",
-          data: marketRevLabels.length ? marketRevVals : [0],
-          backgroundColor: "rgba(59,130,246,0.40)",
-          borderColor: "rgba(255,255,255,0.18)",
-          borderWidth: 1
-        }]
+        labels: marketLabels.length ? marketLabels : ["—"],
+        datasets: [
+          {
+            label: "Revenue",
+            data: marketLabels.length ? marketRevVals : [0],
+            backgroundColor: "rgba(59,130,246,0.35)",
+            borderColor: "rgba(255,255,255,0.18)",
+            borderWidth: 1,
+          },
+        ],
       },
       options: {
         responsive: true,
         plugins: { legend: { labels: { color: common.color } } },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
+      },
     });
   }
 
-  // Profit by Condition
+  // Profit by city
+  const cityEl = $("#cityBar");
+  if (cityEl) {
+    destroyChart("cityBar");
+    charts.cityBar = new Chart(cityEl.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: cityLabels.length ? cityLabels : ["—"],
+        datasets: [
+          {
+            label: "Net Profit",
+            data: cityLabels.length ? cityVals : [0],
+            backgroundColor: (ctx) => ((ctx.raw ?? 0) >= 0 ? "rgba(168,85,247,0.45)" : "rgba(239,68,68,0.55)"),
+            borderColor: "rgba(255,255,255,0.18)",
+            borderWidth: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: common.color } } },
+        scales: {
+          x: { ticks: { color: common.color }, grid: { color: common.grid } },
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
+      },
+    });
+  }
+
+  // Profit by condition
   const condEl = $("#conditionBar");
   if (condEl) {
-    destroy("conditionBar");
+    destroyChart("conditionBar");
     charts.conditionBar = new Chart(condEl.getContext("2d"), {
       type: "bar",
       data: {
         labels: condLabels,
-        datasets: [{
-          label: "Profit (Net Alloc.)",
-          data: condProfitVals,
-          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(59,130,246,0.45)" : "rgba(239,68,68,0.55)",
-          borderColor: "rgba(255,255,255,0.18)",
-          borderWidth: 1
-        }]
+        datasets: [
+          {
+            label: "Net Profit",
+            data: condProfitVals,
+            backgroundColor: (ctx) => ((ctx.raw ?? 0) >= 0 ? "rgba(59,130,246,0.45)" : "rgba(239,68,68,0.55)"),
+            borderColor: "rgba(255,255,255,0.18)",
+            borderWidth: 1,
+          },
+        ],
       },
       options: {
         responsive: true,
         plugins: { legend: { labels: { color: common.color } } },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
+      },
     });
   }
 
-  // Sell-through by Condition
+  // Sell-through by condition
   const stEl = $("#sellThroughCond");
   if (stEl) {
-    destroy("sellThroughCond");
+    destroyChart("sellThroughCond");
     charts.sellThroughCond = new Chart(stEl.getContext("2d"), {
       type: "bar",
       data: {
         labels: condLabels,
-        datasets: [{
-          label: "Sell-through %",
-          data: condSellThrough,
-          backgroundColor: "rgba(245,158,11,0.35)",
-          borderColor: "rgba(255,255,255,0.18)",
-          borderWidth: 1
-        }]
+        datasets: [
+          {
+            label: "Sell-through %",
+            data: sellThroughVals,
+            backgroundColor: "rgba(34,197,94,0.35)",
+            borderColor: "rgba(255,255,255,0.18)",
+            borderWidth: 1,
+          },
+        ],
       },
       options: {
         responsive: true,
         plugins: { legend: { labels: { color: common.color } } },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => `${v}%` }, grid: { color: common.grid }, min: 0, max: 100 }
-        }
-      }
+          y: { ticks: { color: common.color }, grid: { color: common.grid }, suggestedMax: 100 },
+        },
+      },
     });
   }
 
-  // Profit by Batch
+  // Profit by batch
   const batchEl = $("#batchBar");
   if (batchEl) {
-    destroy("batchBar");
+    destroyChart("batchBar");
     charts.batchBar = new Chart(batchEl.getContext("2d"), {
       type: "bar",
       data: {
         labels: batchLabels.length ? batchLabels : ["—"],
-        datasets: [{
-          label: "Profit (Net Alloc.)",
-          data: batchLabels.length ? batchProfitVals : [0],
-          backgroundColor: (ctx) => (ctx.raw ?? 0) >= 0 ? "rgba(168,85,247,0.45)" : "rgba(239,68,68,0.55)",
-          borderColor: "rgba(255,255,255,0.18)",
-          borderWidth: 1
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { labels: { color: common.color } } },
-        scales: {
-          x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
-    });
-  }
-
-  // Spent vs Revenue by Batch
-  const bsrEl = $("#batchSpendRev");
-  if (bsrEl) {
-    destroy("batchSpendRev");
-    charts.batchSpendRev = new Chart(bsrEl.getContext("2d"), {
-      type: "bar",
-      data: {
-        labels: batchSpendLabels.length ? batchSpendLabels : ["—"],
         datasets: [
           {
-            label: "Spent (Purchase+Material+Fees)",
-            data: batchSpendLabels.length ? batchSpendVals : [0],
-            backgroundColor: "rgba(239,68,68,0.35)",
+            label: "Net Profit",
+            data: batchLabels.length ? batchProfitVals : [0],
+            backgroundColor: (ctx) => ((ctx.raw ?? 0) >= 0 ? "rgba(168,85,247,0.45)" : "rgba(239,68,68,0.55)"),
             borderColor: "rgba(255,255,255,0.18)",
-            borderWidth: 1
+            borderWidth: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: common.color } } },
+        scales: {
+          x: { ticks: { color: common.color }, grid: { color: common.grid } },
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
+      },
+    });
+  }
+
+  // Spent vs Revenue by batch
+  const bsrEl = $("#batchSpendRev");
+  if (bsrEl) {
+    destroyChart("batchSpendRev");
+    charts.batchSpendRev = new Chart(bsrEl.getContext("2d"), {
+      data: {
+        labels: batchLabels.length ? batchLabels : ["—"],
+        datasets: [
+          {
+            type: "bar",
+            label: "Spent (Cost)",
+            data: batchLabels.length ? batchSpentVals : [0],
+            backgroundColor: "rgba(245,158,11,0.30)",
+            borderColor: "rgba(255,255,255,0.18)",
+            borderWidth: 1,
           },
           {
+            type: "bar",
             label: "Revenue",
-            data: batchSpendLabels.length ? batchRevVals : [0],
-            backgroundColor: "rgba(34,197,94,0.35)",
+            data: batchLabels.length ? batchRevVals : [0],
+            backgroundColor: "rgba(59,130,246,0.35)",
             borderColor: "rgba(255,255,255,0.18)",
-            borderWidth: 1
-          }
-        ]
+            borderWidth: 1,
+          },
+        ],
       },
       options: {
         responsive: true,
         plugins: { legend: { labels: { color: common.color } } },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
-    });
-  }
-
-  // Buyer Breakdown
-  const buyerEl = $("#buyerBar");
-  if (buyerEl) {
-    destroy("buyerBar");
-    charts.buyerBar = new Chart(buyerEl.getContext("2d"), {
-      type: "bar",
-      data: {
-        labels: buyerLabels.length ? buyerLabels : ["—"],
-        datasets: [{
-          label: "Revenue",
-          data: buyerLabels.length ? buyerVals : [0],
-          backgroundColor: "rgba(59,130,246,0.35)",
-          borderColor: "rgba(255,255,255,0.18)",
-          borderWidth: 1
-        }]
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
       },
-      options: {
-        responsive: true,
-        plugins: { legend: { labels: { color: common.color } } },
-        scales: {
-          x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
     });
   }
 
-  // Fees + Shipping Over Time
+  // Fees + Shipping over time
   const feesEl = $("#feesLine");
   if (feesEl) {
-    destroy("feesLine");
+    destroyChart("feesLine");
     charts.feesLine = new Chart(feesEl.getContext("2d"), {
       type: "line",
       data: {
         labels: months.length ? months : ["—"],
-        datasets: [{
-          label: "Fees + Shipping",
-          data: months.length ? feesTotalByMonthArr : [0],
-          borderColor: "rgba(245,158,11,0.95)",
-          backgroundColor: "rgba(245,158,11,0.18)",
-          fill: true,
-          tension: 0.25,
-          pointRadius: 3
-        }]
+        datasets: [
+          {
+            label: "Fees + Shipping (you paid)",
+            data: months.length ? feesShipVals : [0],
+            borderColor: "rgba(245,158,11,0.75)",
+            backgroundColor: "rgba(245,158,11,0.20)",
+            fill: true,
+            tension: 0.25,
+            pointRadius: 3,
+          },
+        ],
       },
       options: {
         responsive: true,
         plugins: { legend: { labels: { color: common.color } } },
         scales: {
           x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
-        }
-      }
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
+        },
+      },
     });
   }
 }
 
-/** ---------- Export / Import (JSON + CSV) ---------- */
-async function exportData() {
+/** =======================
+ *  CSV Import
+ *  ======================= */
+function parseCSV(text) {
+  // Simple CSV parser with quotes support
+  const rows = [];
+  let i = 0;
+  let field = "";
+  let row = [];
+  let inQuotes = false;
+
+  const pushField = () => {
+    row.push(field);
+    field = "";
+  };
+  const pushRow = () => {
+    rows.push(row);
+    row = [];
+  };
+
+  while (i < text.length) {
+    const c = text[i];
+
+    if (c === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        field += '"';
+        i += 2;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      i++;
+      continue;
+    }
+
+    if (!inQuotes && (c === "," || c === "\n" || c === "\r")) {
+      pushField();
+      if (c === "\n") pushRow();
+      i++;
+      // handle \r\n
+      if (c === "\r" && text[i] === "\n") i++;
+      continue;
+    }
+
+    field += c;
+    i++;
+  }
+  pushField();
+  pushRow();
+
+  // Trim empty trailing rows
+  return rows.filter((r) => r.some((x) => String(x).trim() !== ""));
+}
+
+function headerMap(headers) {
+  const m = new Map();
+  headers.forEach((h, idx) => {
+    const key = String(h || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+    if (key) m.set(key, idx);
+  });
+  return m;
+}
+
+function getCell(row, hm, key) {
+  const idx = hm.get(key);
+  if (idx === undefined) return "";
+  return row[idx] ?? "";
+}
+
+function conditionFromText(v) {
+  const s = String(v || "").trim().toLowerCase();
+  if (!s) return "used_incomplete";
+  if (s.includes("sealed")) return "new_sealed";
+  if (s.includes("open")) return "new_openbox";
+  if (s.includes("complete")) return "used_complete";
+  if (s.includes("incomplete")) return "used_incomplete";
+  return normalizeCondition(s);
+}
+
+async function importCSVFile(file) {
+  const text = await file.text();
+  const rows = parseCSV(text);
+  if (rows.length < 2) {
+    toast("CSV looks empty.");
+    return;
+  }
+
+  const headers = rows[0];
+  const hm = headerMap(headers);
+
+  // Expected columns (flexible):
+  // name, set_number, setnumber, purchase_date, purchase_cost, material_cost, batch, condition, bought_from, buy_payment, box_included, manual_included,
+  // sold_date, sold_on, city, buyer, item_price, shipping_charged, shipping_paid, platform_fees, sell_payment, notes
+  const createdInv = [];
+  const createdSales = [];
+
+  // optional lookup if missing name/photo
+  const key = getRBKey();
+  let lookupsLeft = key ? 30 : 0;
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+
+    const setNumber = String(getCell(row, hm, "set_number") || getCell(row, hm, "setnumber") || "").trim();
+    let name = String(getCell(row, hm, "name") || "").trim();
+    let setImageUrl = String(getCell(row, hm, "set_image_url") || getCell(row, hm, "image") || "").trim();
+
+    if ((!name || !setImageUrl) && setNumber && lookupsLeft > 0) {
+      const info = await rebrickableLookup(setNumber);
+      if (info) {
+        if (!name && info.name) name = info.name;
+        if (!setImageUrl && info.img) setImageUrl = info.img;
+      }
+      lookupsLeft--;
+    }
+
+    const inv = {
+      id: uid(),
+      name,
+      setNumber,
+      setImageUrl,
+      purchaseDate: String(getCell(row, hm, "purchase_date") || getCell(row, hm, "date_bought") || "").trim(),
+      batch: normalizeBatch(getCell(row, hm, "batch")),
+      condition: conditionFromText(getCell(row, hm, "condition")),
+      boughtFrom: String(getCell(row, hm, "bought_from") || "").trim(),
+      buyPayment: String(getCell(row, hm, "buy_payment") || "").trim(),
+      purchaseCost: toNum(getCell(row, hm, "purchase_cost") || getCell(row, hm, "purchase") || ""),
+      materialCost: toNum(getCell(row, hm, "material_cost") || getCell(row, hm, "material") || ""),
+      boxIncluded: String(getCell(row, hm, "box_included") || "yes").trim().toLowerCase() === "no" ? "no" : "yes",
+      manualIncluded: String(getCell(row, hm, "manual_included") || "yes").trim().toLowerCase() === "no" ? "no" : "yes",
+      status: "in_stock",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    if (!inv.name || !inv.purchaseDate) continue;
+
+    // Optional sale in same CSV row
+    const soldDate = String(getCell(row, hm, "sold_date") || "").trim();
+    const itemPrice = toNum(getCell(row, hm, "item_price") || getCell(row, hm, "sold_price") || "");
+    const shippingCharged = toNum(getCell(row, hm, "shipping_charged") || "");
+    const shippingPaid = toNum(getCell(row, hm, "shipping_paid") || "");
+    const platformFees = toNum(getCell(row, hm, "platform_fees") || getCell(row, hm, "fees") || "");
+
+    if (soldDate && (itemPrice > 0 || shippingCharged > 0)) {
+      inv.status = "sold";
+
+      const sale = {
+        id: uid(),
+        inventoryId: inv.id,
+        soldDate,
+        soldOn: String(getCell(row, hm, "sold_on") || getCell(row, hm, "marketplace") || "").trim(),
+        city: String(getCell(row, hm, "city") || "").trim(),
+        buyer: String(getCell(row, hm, "buyer") || "").trim(),
+        itemPrice,
+        shippingCharged,
+        shippingPaid,
+        platformFees,
+        sellPayment: String(getCell(row, hm, "sell_payment") || "").trim(),
+        notes: String(getCell(row, hm, "notes") || "").trim(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      createdSales.push(sale);
+    }
+
+    createdInv.push(inv);
+  }
+
+  // write to DB
+  for (const inv of createdInv) await txPut(INVENTORY_STORE, inv);
+  for (const s of createdSales) await txPut(SALES_STORE, s);
+
+  toast(`CSV imported ✅ (${createdInv.length} inventory, ${createdSales.length} sales)`);
+
+  await reloadAll();
+  rerenderAll();
+}
+
+/** =======================
+ *  Export/Import JSON
+ *  ======================= */
+async function exportJSON() {
   const payload = {
     exportedAt: new Date().toISOString(),
-    inventory: await txGetAll(INVENTORY_STORE),
-    sales: await txGetAll(SALES_STORE),
-    expenses: await txGetAll(EXPENSES_STORE)
+    inventory: allInv,
+    sales: allSales,
+    expenses: allExpenses,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `lego-flip-tracker-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.download = `lego-tracker-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
   toast("Exported 📦");
 }
 
-async function importData(file) {
+async function importJSON(file) {
   const text = await file.text();
   let parsed;
-  try { parsed = JSON.parse(text); }
-  catch { toast("Invalid JSON file."); return; }
-
-  const inv = parsed?.inventory;
-  const sa = parsed?.sales;
-  const ex = parsed?.expenses;
-
-  // Backward compatible: if old "flips" exists, skip (your project migrated earlier; not needed here)
-
-  if (Array.isArray(inv)) {
-    for (const raw of inv) {
-      const item = {
-        id: raw.id || uid(),
-        name: (raw.name || "").trim(),
-        setNumber: (raw.setNumber || "").trim(),
-        setImageUrl: (raw.setImageUrl || "").trim(),
-        purchaseDate: raw.purchaseDate || "",
-        purchaseCost: toNum(raw.purchaseCost),
-        materialCost: toNum(raw.materialCost),
-        condition: normalizeCondition(raw.condition),
-        batch: normalizeBatch(raw.batch),
-        boughtFrom: (raw.boughtFrom || "").trim(),
-        buyPayment: (raw.buyPayment || "").trim(),
-        boxIncluded: (raw.boxIncluded === "no" ? "no" : "yes"),
-        manualIncluded: (raw.manualIncluded === "no" ? "no" : "yes"),
-        createdAt: toNum(raw.createdAt) || Date.now(),
-        updatedAt: Date.now()
-      };
-      if (!item.name || !item.purchaseDate) continue;
-      await txPut(INVENTORY_STORE, item);
-    }
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    toast("Invalid JSON.");
+    return;
   }
 
-  if (Array.isArray(sa)) {
-    for (const raw of sa) {
-      const s = {
-        id: raw.id || uid(),
-        inventoryId: (raw.inventoryId || "").trim(),
-        soldDate: raw.soldDate || "",
-        soldPrice: toNum(raw.soldPrice),
-        fees: toNum(raw.fees),
-        soldOn: (raw.soldOn || "").trim(),
-        sellPayment: (raw.sellPayment || "").trim(),
-        buyer: (raw.buyer || "").trim(),
-        notes: (raw.notes || "").trim(),
-        createdAt: toNum(raw.createdAt) || Date.now(),
-        updatedAt: Date.now()
-      };
-      if (!s.inventoryId || !s.soldDate || s.soldPrice <= 0) continue;
-      await txPut(SALES_STORE, s);
-    }
-  }
+  const inv = Array.isArray(parsed.inventory) ? parsed.inventory : [];
+  const sales = Array.isArray(parsed.sales) ? parsed.sales : [];
+  const expenses = Array.isArray(parsed.expenses) ? parsed.expenses : [];
 
-  if (Array.isArray(ex)) {
-    for (const raw of ex) {
-      const e = {
-        id: raw.id || uid(),
-        amount: toNum(raw.amount),
-        category: (raw.category || "Other").trim() || "Other",
-        date: raw.date || "",
-        note: (raw.note || "").trim(),
-        createdAt: toNum(raw.createdAt) || Date.now()
-      };
-      if (!e.date || e.amount <= 0) continue;
-      await txPut(EXPENSES_STORE, e);
-    }
-  }
+  // merge by overwrite
+  for (const i of inv) await txPut(INVENTORY_STORE, { ...i, id: i.id || uid(), updatedAt: Date.now() });
+  for (const s of sales) await txPut(SALES_STORE, { ...s, id: s.id || uid(), updatedAt: Date.now() });
+  for (const e of expenses) await txPut(EXPENSES_STORE, { ...e, id: e.id || uid() });
 
-  await reloadAll();
   toast("Imported ✅");
-}
-
-function parseCSV(text) {
-  // Simple CSV parser (handles quotes)
-  const rows = [];
-  let cur = [];
-  let field = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (inQuotes) {
-      if (ch === '"' && next === '"') { field += '"'; i++; continue; }
-      if (ch === '"') { inQuotes = false; continue; }
-      field += ch;
-      continue;
-    }
-
-    if (ch === '"') { inQuotes = true; continue; }
-    if (ch === ",") { cur.push(field); field = ""; continue; }
-    if (ch === "\n") { cur.push(field); rows.push(cur); cur = []; field = ""; continue; }
-    if (ch === "\r") continue;
-    field += ch;
-  }
-  cur.push(field);
-  rows.push(cur);
-
-  // Trim empty trailing lines
-  return rows.filter(r => r.some(c => String(c).trim() !== ""));
-}
-
-async function importCSV(file) {
-  const text = await file.text();
-  const rows = parseCSV(text);
-  if (!rows.length) return toast("Empty CSV.");
-
-  const headers = rows[0].map(h => String(h).trim());
-  const idx = (name) => headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
-
-  // Supported columns:
-  // setNumber,name,setImageUrl,purchaseDate,purchaseCost,materialCost,condition,batch,boughtFrom,buyPayment,boxIncluded,manualIncluded
-  // soldDate,soldPrice,fees,soldOn,sellPayment,buyer,notes
-  const h = {
-    setNumber: idx("setNumber"),
-    name: idx("name"),
-    setImageUrl: idx("setImageUrl"),
-    purchaseDate: idx("purchaseDate"),
-    purchaseCost: idx("purchaseCost"),
-    materialCost: idx("materialCost"),
-    condition: idx("condition"),
-    batch: idx("batch"),
-    boughtFrom: idx("boughtFrom"),
-    buyPayment: idx("buyPayment"),
-    boxIncluded: idx("boxIncluded"),
-    manualIncluded: idx("manualIncluded"),
-    soldDate: idx("soldDate"),
-    soldPrice: idx("soldPrice"),
-    fees: idx("fees"),
-    soldOn: idx("soldOn"),
-    sellPayment: idx("sellPayment"),
-    buyer: idx("buyer"),
-    notes: idx("notes")
-  };
-
-  const needsAny = Object.values(h).some(i => i >= 0);
-  if (!needsAny) return toast("CSV headers not recognized.");
-
-  // Optional: if name/img missing, try lookup (if API key exists) for up to 30 items
-  const key = getRBKey();
-
-  let lookupCount = 0;
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
-
-    const invId = uid();
-    const setNumber = h.setNumber >= 0 ? (row[h.setNumber] || "").trim() : "";
-    let name = h.name >= 0 ? (row[h.name] || "").trim() : "";
-    let setImageUrl = h.setImageUrl >= 0 ? (row[h.setImageUrl] || "").trim() : "";
-
-    const purchaseDate = h.purchaseDate >= 0 ? (row[h.purchaseDate] || "").trim() : "";
-    const purchaseCost = h.purchaseCost >= 0 ? toNum(row[h.purchaseCost]) : 0;
-    const materialCost = h.materialCost >= 0 ? toNum(row[h.materialCost]) : 0;
-
-    // Condition in CSV can be label or key
-    let condRaw = h.condition >= 0 ? (row[h.condition] || "").trim() : "";
-    // Accept "Used (complete)" etc:
-    if (condRaw && !CONDITION_LABELS[condRaw]) {
-      const lower = condRaw.toLowerCase();
-      if (lower.includes("sealed")) condRaw = "new_sealed";
-      else if (lower.includes("open")) condRaw = "new_openbox";
-      else if (lower.includes("complete")) condRaw = "used_complete";
-      else if (lower.includes("incomplete")) condRaw = "used_incomplete";
-    }
-    const condition = normalizeCondition(condRaw);
-
-    const batch = h.batch >= 0 ? normalizeBatch(row[h.batch]) : "";
-    const boughtFrom = h.boughtFrom >= 0 ? (row[h.boughtFrom] || "").trim() : "";
-    const buyPayment = h.buyPayment >= 0 ? (row[h.buyPayment] || "").trim() : "";
-    const boxIncluded = h.boxIncluded >= 0 ? ((String(row[h.boxIncluded] || "").trim().toLowerCase() === "no") ? "no" : "yes") : "yes";
-    const manualIncluded = h.manualIncluded >= 0 ? ((String(row[h.manualIncluded] || "").trim().toLowerCase() === "no") ? "no" : "yes") : "yes";
-
-    // Lookup if missing and key exists
-    if (key && setNumber && (!name || !setImageUrl) && lookupCount < 30) {
-      const res = await rebrickableLookup(setNumber);
-      if (res) {
-        if (!name && res.name) name = res.name;
-        if (!setImageUrl && res.img) setImageUrl = res.img;
-      }
-      lookupCount++;
-    }
-
-    const inv = {
-      id: invId,
-      name: name || "(unnamed)",
-      setNumber,
-      setImageUrl,
-      purchaseDate,
-      purchaseCost,
-      materialCost,
-      condition,
-      batch,
-      boughtFrom,
-      buyPayment,
-      boxIncluded,
-      manualIncluded,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-
-    if (!inv.purchaseDate) continue; // require purchaseDate
-    await txPut(INVENTORY_STORE, inv);
-
-    // Optional sale portion
-    const soldDate = h.soldDate >= 0 ? (row[h.soldDate] || "").trim() : "";
-    const soldPrice = h.soldPrice >= 0 ? toNum(row[h.soldPrice]) : 0;
-
-    if (soldDate && soldPrice > 0) {
-      const sale = {
-        id: uid(),
-        inventoryId: invId,
-        soldDate,
-        soldPrice,
-        fees: h.fees >= 0 ? toNum(row[h.fees]) : 0,
-        soldOn: h.soldOn >= 0 ? (row[h.soldOn] || "").trim() : "",
-        sellPayment: h.sellPayment >= 0 ? (row[h.sellPayment] || "").trim() : "",
-        buyer: h.buyer >= 0 ? (row[h.buyer] || "").trim() : "",
-        notes: h.notes >= 0 ? (row[h.notes] || "").trim() : "",
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      };
-      await txPut(SALES_STORE, sale);
-    }
-  }
-
   await reloadAll();
-  toast("CSV imported ✅");
-}
-
-/** ---------- Misc UI helpers ---------- */
-function todayStr() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-/** ---------- Main rerender ---------- */
-function rerenderAll() {
-  updateBatchFiltersFromInventory();
-  renderInventoryDatalist();
-  renderInventoryTable();
-  renderExpenseSummary();
-  rerenderStats();
-}
-
-/** ---------- Events wiring ---------- */
-async function reloadAll() {
-  inventory = await txGetAll(INVENTORY_STORE);
-  sales = await txGetAll(SALES_STORE);
-  expenses = await txGetAll(EXPENSES_STORE);
-  renderExpensesTable();
   rerenderAll();
 }
 
-function setupFilters() {
-  $("#searchInput")?.addEventListener("input", () => { renderInventoryTable(); });
-  $("#statusFilter")?.addEventListener("change", () => { renderInventoryTable(); });
-  $("#conditionFilter")?.addEventListener("change", () => { renderInventoryTable(); });
-  $("#batchFilter")?.addEventListener("change", () => { renderInventoryTable(); });
+/** =======================
+ *  Service worker
+ *  ======================= */
+async function registerSW() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    await navigator.serviceWorker.register("./sw.js");
+  } catch (e) {
+    console.warn("SW registration failed:", e);
+  }
 }
 
-function setupStatsFilters() {
-  $("#statsRange")?.addEventListener("change", rerenderStats);
-  $("#statsBatchFilter")?.addEventListener("change", rerenderStats);
+/** =======================
+ *  Reload + render
+ *  ======================= */
+async function reloadAll() {
+  allInv = await txGetAll(INVENTORY_STORE);
+  allSales = await txGetAll(SALES_STORE);
+  allExpenses = await txGetAll(EXPENSES_STORE);
+
+  // normalize
+  for (const inv of allInv) {
+    inv.status = inv.status || "in_stock";
+    inv.condition = normalizeCondition(inv.condition);
+    inv.batch = normalizeBatch(inv.batch);
+    inv.purchaseCost = toNum(inv.purchaseCost);
+    inv.materialCost = toNum(inv.materialCost);
+    if (inv.boxIncluded !== "yes" && inv.boxIncluded !== "no") inv.boxIncluded = "yes";
+    if (inv.manualIncluded !== "yes" && inv.manualIncluded !== "no") inv.manualIncluded = "yes";
+  }
 }
 
-function setupInventoryPick() {
-  $("#invPick")?.addEventListener("input", async (e) => {
-    const inv = findInventoryByPickValue(e.target.value);
+function rerenderAll() {
+  updateBatchUI();
+  updateUnsoldPicker();
+
+  // Inventory list
+  const invList = getFilteredInventory();
+  renderInventoryTable(invList);
+
+  // Trade picker list
+  renderTradePickTable();
+
+  // Expenses
+  renderExpensesTable(allExpenses);
+  renderExpenseSummary(allExpenses);
+
+  // Stats
+  renderStats();
+}
+
+/** =======================
+ *  Event handlers
+ *  ======================= */
+async function handleInvSave(ev) {
+  ev.preventDefault();
+  const f = ev.target;
+  const fd = new FormData(f);
+  const inv = normalizeInvFormData(fd);
+
+  if (!inv.name) return toast("Name required.");
+  if (!inv.purchaseDate) return toast("Purchase date required.");
+
+  // Preserve existing status/createdAt if updating
+  if (inv.id) {
+    const existing = allInv.find((x) => x.id === inv.id);
+    if (existing) {
+      inv.status = existing.status || "in_stock";
+      inv.createdAt = existing.createdAt || inv.createdAt;
+    }
+  }
+
+  await txPut(INVENTORY_STORE, inv);
+  toast(inv.id ? "Inventory updated ✅" : "Inventory saved ✅");
+
+  await reloadAll();
+  resetInvForm();
+  rerenderAll();
+}
+
+async function handleInvLookup() {
+  const f = $("#invForm");
+  if (!f) return;
+  const setNum = f.setNumber.value;
+  const res = await rebrickableLookup(setNum);
+  if (!res) return toast("Lookup failed.");
+  if (res.name) f.name.value = res.name;
+  if (res.img) {
+    f.setImageUrl.value = res.img;
+    setPreview($("#invPhotoPreview"), res.img);
+  }
+  toast("Filled ✅");
+}
+
+async function handleTradeLookup() {
+  const f = $("#tradeForm");
+  if (!f) return;
+  const setNum = f.setNumber.value;
+  const res = await rebrickableLookup(setNum);
+  if (!res) return toast("Lookup failed.");
+  if (res.name) f.name.value = res.name;
+  if (res.img) {
+    f.setImageUrl.value = res.img;
+    setPreview($("#tradePhotoPreview"), res.img);
+  }
+  toast("Filled ✅");
+}
+
+async function handleInvTableClick(ev) {
+  const editId = ev.target?.getAttribute?.("data-inv-edit");
+  const sellId = ev.target?.getAttribute?.("data-inv-sell");
+  const delId = ev.target?.getAttribute?.("data-inv-del");
+
+  if (editId) {
+    const inv = allInv.find((x) => x.id === editId);
+    if (!inv) return;
+    setInvForm(inv);
+    showView("viewInventory");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+
+  if (sellId) {
+    const inv = allInv.find((x) => x.id === sellId);
     if (!inv) return;
 
-    // Set hidden inventoryId
-    const f = $("#saleForm");
-    if (!f) return;
-    f.inventoryId.value = inv.id;
+    const sale = await saleByInventoryId(inv.id);
 
-    // Load sale if exists (so user can edit sold item)
-    const sale = await txGetSaleByInventoryId(inv.id);
-    fillSaleForm(inv, sale);
+    // Open Sell tab and load form (even if already sold)
+    showView("viewSell");
+    setSaleForm(inv, sale);
+
+    // also fill picker textbox for clarity (not required)
+    const pick = $("#invPick");
+    if (pick) pick.value = `${inv.name || "(unnamed)"}${inv.setNumber ? ` • #${inv.setNumber}` : ""} • ${inv.id}`;
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+
+  if (delId) {
+    const inv = allInv.find((x) => x.id === delId);
+    if (!inv) return;
+
+    const ok = confirm(`Delete "${inv.name}"? (This deletes its sale too if exists)`);
+    if (!ok) return;
+
+    // delete sale if present
+    const sale = allSales.find((s) => s.inventoryId === inv.id);
+    if (sale) await txDelete(SALES_STORE, sale.id);
+
+    await txDelete(INVENTORY_STORE, inv.id);
+    toast("Deleted 🗑️");
+
+    await reloadAll();
+    rerenderAll();
+  }
+}
+
+async function handleSellPickerChange() {
+  const v = $("#invPick")?.value || "";
+  const id = parsePickValueToId(v);
+  if (!id) return;
+
+  const inv = allInv.find((x) => x.id === id);
+  if (!inv) return;
+
+  if ((inv.status || "in_stock") !== "in_stock") {
+    toast("Sell picker shows unsold only. Edit sold via 🧾 in Inventory list.");
+    return;
+  }
+
+  const existingSale = await saleByInventoryId(inv.id);
+  setSaleForm(inv, existingSale);
+  toast("Loaded ✅");
+}
+
+async function handleSaleSave(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const sale = normalizeSaleFormData(fd);
+
+  if (!sale.inventoryId) return toast("Pick an inventory item first.");
+  if (!sale.soldDate) return toast("Sold date required.");
+  if (sale.itemPrice <= 0 && sale.shippingCharged <= 0) return toast("Enter item price and/or shipping charged.");
+
+  const inv = allInv.find((x) => x.id === sale.inventoryId);
+  if (!inv) return toast("Inventory item missing.");
+
+  // write sale
+  await txPut(SALES_STORE, sale);
+
+  // set inventory status sold
+  inv.status = "sold";
+  inv.updatedAt = Date.now();
+  await txPut(INVENTORY_STORE, inv);
+
+  toast(sale.id ? "Sale saved ✅" : "Sale saved ✅");
+
+  await reloadAll();
+  rerenderAll();
+}
+
+async function handleSaleReset() {
+  resetSaleForm();
+  $("#invPick").value = "";
+}
+
+async function handleExpenseAdd(ev) {
+  ev.preventDefault();
+  const exp = normalizeExpenseForm(new FormData(ev.target));
+  if (!exp.amount || exp.amount <= 0) return toast("Amount required.");
+  if (!exp.date) return toast("Date required.");
+  if (!exp.category) return toast("Category required.");
+
+  await txPut(EXPENSES_STORE, exp);
+  toast("Expense added ✅");
+
+  ev.target.reset();
+  // restore date default
+  const d = $("#expenseForm")?.querySelector('input[name="date"]');
+  if (d) d.value = new Date().toISOString().slice(0, 10);
+
+  await reloadAll();
+  rerenderAll();
+}
+
+async function handleExpenseTableClick(ev) {
+  const id = ev.target?.getAttribute?.("data-exp-del");
+  if (!id) return;
+  await txDelete(EXPENSES_STORE, id);
+  toast("Expense deleted 🗑️");
+  await reloadAll();
+  rerenderAll();
+}
+
+async function handleExpensesClear() {
+  const ok = confirm("Clear all expenses? This cannot be undone.");
+  if (!ok) return;
+  await txClear(EXPENSES_STORE);
+  toast("Expenses cleared 🗑️");
+  await reloadAll();
+  rerenderAll();
+}
+
+async function handleTradePickClick(ev) {
+  const id = ev.target?.getAttribute?.("data-trade-pick");
+  if (!id) return;
+  const checked = ev.target.checked;
+  if (checked) tradeSelected.add(id);
+  else tradeSelected.delete(id);
+  updateTradeBadge();
+}
+
+async function handleTradeClear() {
+  tradeSelected.clear();
+  renderTradePickTable();
+  setTradeFormDefaults();
+  toast("Selection cleared");
+}
+
+async function handleTradeSubmit(ev) {
+  ev.preventDefault();
+
+  if (!tradeSelected.size) return toast("Select at least 1 item to trade.");
+
+  const f = ev.target;
+  const fd = new FormData(f);
+  const o = Object.fromEntries(fd.entries());
+
+  const name = (o.name || "").trim();
+  const setNumber = (o.setNumber || "").trim();
+  const tradeDate = (o.tradeDate || "").trim();
+  const batch = normalizeBatch(o.batch);
+  const condition = normalizeCondition(o.condition);
+  const setImageUrl = (o.setImageUrl || "").trim();
+  const notes = (o.notes || "").trim();
+
+  if (!name) return toast("New item name required.");
+  if (!tradeDate) return toast("Trade date required.");
+
+  // cost transfer: sum purchaseCost/materialCost
+  let purchaseCostSum = 0;
+  let materialCostSum = 0;
+
+  const selectedInvs = [];
+  for (const id of tradeSelected) {
+    const inv = allInv.find((x) => x.id === id);
+    if (inv && (inv.status || "in_stock") === "in_stock") selectedInvs.push(inv);
+  }
+  if (!selectedInvs.length) return toast("Selected items are not in stock.");
+
+  for (const inv of selectedInvs) {
+    purchaseCostSum += toNum(inv.purchaseCost);
+    materialCostSum += toNum(inv.materialCost);
+  }
+
+  // Create new inventory item (train)
+  const newInvId = uid();
+  const newInv = {
+    id: newInvId,
+    name,
+    setNumber,
+    setImageUrl,
+    purchaseDate: tradeDate,
+    batch,
+    condition,
+    boughtFrom: "Trade",
+    buyPayment: "",
+    purchaseCost: purchaseCostSum,
+    materialCost: materialCostSum,
+    boxIncluded: "yes",
+    manualIncluded: "yes",
+    status: "in_stock",
+    tradeNotes: notes,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  // Mark old as exchanged (excluded from stats to avoid double counting)
+  for (const inv of selectedInvs) {
+    inv.status = "exchanged";
+    inv.exchangedToId = newInvId;
+    inv.exchangedAt = tradeDate;
+    inv.updatedAt = Date.now();
+    await txPut(INVENTORY_STORE, inv);
+
+    // Safety: if a sale exists accidentally, delete it (to prevent double counting)
+    const sale = allSales.find((s) => s.inventoryId === inv.id);
+    if (sale) await txDelete(SALES_STORE, sale.id);
+  }
+
+  await txPut(INVENTORY_STORE, newInv);
+
+  toast("Trade completed 🔁");
+  tradeSelected.clear();
+  setTradeFormDefaults();
+
+  await reloadAll();
+  rerenderAll();
+
+  // Jump user to Inventory view to see new item
+  showView("viewInventory");
+}
+
+/** =======================
+ *  Install (PWA)
+ *  ======================= */
+let deferredPrompt = null;
+function setupInstallFlow() {
+  const installBtn = $("#installBtn");
+  const hint = $("#installHint");
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (installBtn) installBtn.hidden = false;
+    if (hint) hint.textContent = "Install to your phone for offline use";
+  });
+
+  installBtn?.addEventListener("click", async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const res = await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    if (installBtn) installBtn.hidden = true;
+    toast(res?.outcome === "accepted" ? "Installed 🎉" : "Install canceled");
   });
 }
 
-/** ---------- Service worker ---------- */
-async function registerSW() {
-  if (!("serviceWorker" in navigator)) return;
-  try { await navigator.serviceWorker.register("./sw.js"); }
-  catch (e) { console.warn("SW registration failed:", e); }
-}
-
-/** ---------- Init ---------- */
+/** =======================
+ *  Init
+ *  ======================= */
 async function init() {
-  setupTabs();
+  // Tabs
+  document.querySelectorAll(".tabBtn").forEach((btn) => {
+    btn.addEventListener("click", () => showView(btn.dataset.view));
+  });
 
-  // Default dates
-  $("#invForm")?.querySelector('input[name="purchaseDate"]') && ($("#invForm").purchaseDate.value = todayStr());
-  $("#saleForm")?.querySelector('input[name="soldDate"]') && ($("#saleForm").soldDate.value = todayStr());
-  $("#expenseForm")?.querySelector('input[name="date"]') && ($("#expenseForm").date.value = todayStr());
-
-  // API key
-  $("#apiKeyBtn")?.addEventListener("click", async () => {
+  // API Key
+  $("#apiKeyBtn")?.addEventListener("click", () => {
     const current = getRBKey();
     const entered = prompt("Rebrickable API key (stored locally in your browser):", current);
     if (entered === null) return;
@@ -1706,78 +1934,90 @@ async function init() {
     toast(getRBKey() ? "API key saved ✅" : "API key cleared");
   });
 
-  // Inventory lookup
-  $("#invLookupBtn")?.addEventListener("click", async () => {
-    const f = $("#invForm");
-    if (!f) return;
-    const setNum = f.setNumber.value;
-    const res = await rebrickableLookup(setNum);
-    if (!res) return;
-    if (res.name) f.name.value = res.name;
-    if (res.img) {
-      f.setImageUrl.value = res.img;
-      setPreview($("#invPhotoPreview"), res.img);
-    }
-    toast("Set info filled ✅");
-  });
+  // Inventory form defaults
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const invForm = $("#invForm");
+  if (invForm) invForm.purchaseDate.value = todayStr;
+  setPreview($("#invPhotoPreview"), "");
 
-  // Forms
-  $("#invForm")?.addEventListener("submit", saveInventory);
-  $("#invResetBtn")?.addEventListener("click", resetInventoryForm);
+  // Trade form defaults
+  const tradeForm = $("#tradeForm");
+  if (tradeForm) tradeForm.tradeDate.value = todayStr;
+  setPreview($("#tradePhotoPreview"), "");
 
-  $("#saleForm")?.addEventListener("submit", saveSale);
-  $("#saleResetBtn")?.addEventListener("click", resetSaleForm);
+  // Sale form defaults
+  const saleForm = $("#saleForm");
+  if (saleForm) saleForm.soldDate.value = todayStr;
+  setPreview($("#salePhotoPreview"), "");
 
-  $("#expenseForm")?.addEventListener("submit", addExpense);
-  $("#expenseTbody")?.addEventListener("click", handleExpenseTableClick);
-  $("#clearExpensesBtn")?.addEventListener("click", clearExpenses);
+  // Expense form defaults
+  const expDate = $("#expenseForm")?.querySelector('input[name="date"]');
+  if (expDate) expDate.value = todayStr;
 
-  // Tables
-  $("#invTbody")?.addEventListener("click", handleInventoryTableClick);
+  // Inventory actions
+  $("#invLookupBtn")?.addEventListener("click", handleInvLookup);
+  $("#invForm")?.addEventListener("submit", handleInvSave);
+  $("#invResetBtn")?.addEventListener("click", resetInvForm);
+  $("#invTbody")?.addEventListener("click", handleInvTableClick);
 
   // Filters
-  setupFilters();
-  setupStatsFilters();
-  setupInventoryPick();
+  $("#searchInput")?.addEventListener("input", rerenderAll);
+  $("#statusFilter")?.addEventListener("change", rerenderAll);
+  $("#conditionFilter")?.addEventListener("change", rerenderAll);
+  $("#batchFilter")?.addEventListener("change", rerenderAll);
 
-  // Export/Import
-  $("#exportBtn")?.addEventListener("click", exportData);
+  // Sell
+  $("#invPick")?.addEventListener("change", handleSellPickerChange);
+  $("#saleForm")?.addEventListener("submit", handleSaleSave);
+  $("#saleResetBtn")?.addEventListener("click", handleSaleReset);
+
+  // Trade
+  $("#tradePickTbody")?.addEventListener("click", handleTradePickClick);
+  $("#tradeLookupBtn")?.addEventListener("click", handleTradeLookup);
+  $("#tradeClearBtn")?.addEventListener("click", handleTradeClear);
+  $("#tradeForm")?.addEventListener("submit", handleTradeSubmit);
+
+  // Expenses
+  $("#expenseForm")?.addEventListener("submit", handleExpenseAdd);
+  $("#expenseTbody")?.addEventListener("click", handleExpenseTableClick);
+  $("#clearExpensesBtn")?.addEventListener("click", handleExpensesClear);
+
+  // Stats filters
+  $("#statsRange")?.addEventListener("change", renderStats);
+  $("#statsBatchFilter")?.addEventListener("change", renderStats);
+
+  // Export / Import
+  $("#exportBtn")?.addEventListener("click", exportJSON);
   $("#importInput")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    await importData(file);
+    await importJSON(file);
     e.target.value = "";
   });
+
   $("#importCsvInput")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    await importCSV(file);
+    await importCSVFile(file);
     e.target.value = "";
   });
 
-  // Init SW
+  setupInstallFlow();
   await registerSW();
 
-  // Load data
   await reloadAll();
+  rerenderAll();
 
-  // Hide previews initially
-  setPreview($("#invPhotoPreview"), $("#invForm")?.setImageUrl?.value || "");
-  setPreview($("#salePhotoPreview"), "");
-
-  // Ensure stats render after Chart is ready
+  // If Chart.js loads late, refresh charts once
   let tries = 0;
   const t = setInterval(() => {
     tries++;
     if (window.Chart) {
       clearInterval(t);
-      rerenderStats();
+      renderStats();
     }
     if (tries > 40) clearInterval(t);
   }, 100);
 }
 
 init();
-
-
-
