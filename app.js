@@ -1155,14 +1155,29 @@ async function registerSW() {
   catch (e) { console.warn("SW registration failed:", e); }
 }
 
-/** ---------- Legacy migration (optional) ---------- */
-async function migrateOldFlipsIfAny() {
-  const hasOld = await storeExists(OLD_FLIPS_STORE);
-  if (!hasOld) return;
+/** ---------- Legacy migration (run ONCE) ---------- */
+const MIGRATION_FLAG = "lego_migrated_flips_to_inventory_v1";
 
+async function migrateOldFlipsIfAny() {
+  // If we've already migrated once, never do it again
+  if (localStorage.getItem(MIGRATION_FLAG) === "1") return;
+
+  const hasOld = await storeExists(OLD_FLIPS_STORE);
+  if (!hasOld) {
+    // Nothing to migrate, but mark as done so it never tries again
+    localStorage.setItem(MIGRATION_FLAG, "1");
+    return;
+  }
+
+  // Only migrate if new stores are empty (first time setup)
   const existingInv = await txGetAll(INVENTORY_STORE);
   const existingSales = await txGetAll(SALES_STORE);
-  if (existingInv.length || existingSales.length) return;
+
+  if (existingInv.length || existingSales.length) {
+    // New system already in use; don't ever try again
+    localStorage.setItem(MIGRATION_FLAG, "1");
+    return;
+  }
 
   const db = await openDB();
   const oldFlips = await new Promise((resolve) => {
@@ -1179,7 +1194,10 @@ async function migrateOldFlipsIfAny() {
     }
   });
 
-  if (!oldFlips.length) return;
+  if (!oldFlips.length) {
+    localStorage.setItem(MIGRATION_FLAG, "1");
+    return;
+  }
 
   for (const f of oldFlips) {
     const inv = {
@@ -1219,8 +1237,10 @@ async function migrateOldFlipsIfAny() {
     }
   }
 
+  localStorage.setItem(MIGRATION_FLAG, "1");
   toast("Migrated old flips ✅");
 }
+
 
 /** ---------- Init ---------- */
 async function init() {
