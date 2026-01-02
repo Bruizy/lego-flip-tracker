@@ -1,3 +1,4 @@
+/* styles.css (FULL UPDATED) */
 :root {
   --bg: #0b1220;
   --card: #101a2f;
@@ -14,16 +15,33 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+
+/* ✅ Stable background (fixes iOS “scroll past background” glitches) */
+html, body { height: 100%; min-height: 100%; }
 body {
   margin: 0;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-  background: radial-gradient(1200px 600px at 30% -20%, rgba(34,197,94,0.18), transparent 60%),
-              radial-gradient(1200px 600px at 80% 0%, rgba(59,130,246,0.12), transparent 55%),
-              var(--bg);
   color: var(--text);
+  background: var(--bg);
+  position: relative;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+body::before{
+  content:"";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(1200px 600px at 30% -20%, rgba(34,197,94,0.18), transparent 60%),
+    radial-gradient(1200px 600px at 80% 0%, rgba(59,130,246,0.12), transparent 55%),
+    var(--bg);
+  background-repeat: no-repeat;
+  background-size: cover;
 }
 
+/* Top bar */
 .topbar {
   position: sticky;
   top: 0;
@@ -53,6 +71,7 @@ body {
 
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
+/* Layout */
 .container { max-width: 1100px; margin: 18px auto; padding: 0 14px 30px; }
 
 .grid {
@@ -73,6 +92,12 @@ body {
 
 h2 { margin: 0 0 10px; font-size: 18px; }
 
+/* Views */
+.view { display: none; }
+.view.active { display: block; }
+.view .card { margin-bottom: 16px; }
+
+/* Forms */
 form .row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -87,6 +112,7 @@ form .row.buttons { grid-template-columns: 1fr 1fr; }
 }
 
 label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+
 input, select, textarea {
   width: 100%;
   padding: 10px 10px;
@@ -100,8 +126,10 @@ input:focus, select:focus, textarea:focus {
   border-color: rgba(34,197,94,0.65);
   box-shadow: 0 0 0 3px rgba(34,197,94,0.12);
 }
+
 .hint { font-size: 12px; color: rgba(147,164,191,0.85); margin-top: -2px; }
 
+/* Buttons */
 .btn {
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.05);
@@ -121,13 +149,12 @@ input:focus, select:focus, textarea:focus {
 .btn.secondary:hover { background: rgba(59,130,246,0.16); }
 
 .btn.file { position: relative; overflow: hidden; }
-.btn.file input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
-}
+.btn.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
+.inputGroup { display:flex; gap:8px; align-items:center; }
+.btn.mini { padding:10px 12px; border-radius:12px; font-weight:900; white-space:nowrap; }
+
+/* KPIs */
 .kpis {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -135,6 +162,7 @@ input:focus, select:focus, textarea:focus {
   margin-bottom: 12px;
 }
 @media (max-width: 980px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+
 .kpi {
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.04);
@@ -144,6 +172,7 @@ input:focus, select:focus, textarea:focus {
 .kpiLabel { font-size: 12px; color: var(--muted); }
 .kpiValue { font-size: 18px; font-weight: 900; margin-top: 4px; }
 
+/* Charts */
 .charts {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -159,6 +188,7 @@ input:focus, select:focus, textarea:focus {
 }
 .chartTitle { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 
+/* Header + filters */
 .listHeader {
   display: flex;
   align-items: center;
@@ -169,6 +199,7 @@ input:focus, select:focus, textarea:focus {
 .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #searchInput { min-width: 260px; }
 
+/* Tables */
 .tableWrap { width: 100%; overflow: auto; border-radius: 14px; border: 1px solid var(--border); }
 .table {
   width: 100%;
@@ -177,33 +208,51 @@ input:focus, select:focus, textarea:focus {
   background: rgba(0,0,0,0.12);
 }
 .table th, .table td {
-  padding: 10px;
+  padding: 8px 10px;            /* ✅ tighter rows */
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: middle;
   font-size: 13px;
+  line-height: 1.2;             /* ✅ reduce row height */
 }
-.table th { color: rgba(147,164,191,0.95); font-weight: 800; background: rgba(255,255,255,0.03); }
+.table th {
+  color: rgba(147,164,191,0.95);
+  font-weight: 800;
+  background: rgba(255,255,255,0.03);
+}
 .table tr:hover td { background: rgba(255,255,255,0.03); }
 
+/* Badges */
 .badge {
   display: inline-flex;
-  padding: 4px 8px;
+  padding: 3px 7px;             /* ✅ tighter badges */
   border-radius: 999px;
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.04);
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;              /* ✅ smaller badge font */
   gap: 6px;
   align-items: center;
 }
 .badge.sold { border-color: rgba(34,197,94,0.30); }
 .badge.unsold { border-color: rgba(245,158,11,0.30); }
 .badge.cond { border-color: rgba(59,130,246,0.25); background: rgba(59,130,246,0.08); }
+.badge.batch { border-color: rgba(168, 85, 247, 0.28); background: rgba(168, 85, 247, 0.10); }
 
-.mono { font-family: var(--mono); }
-.small { font-size: 12px; color: var(--muted); }
+/* Thumb */
+.photoRow { display:flex; gap:10px; align-items:center; }
+.thumb{
+  width: 64px;                  /* ✅ smaller thumb */
+  height: 64px;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.06);
+  padding: 6px;
+}
+.thumb.clickable { cursor: pointer; }
 
+/* Actions */
 .rowActions { display: flex; gap: 8px; justify-content: flex-end; }
 .iconBtn {
   padding: 8px 10px;
@@ -215,8 +264,13 @@ input:focus, select:focus, textarea:focus {
 }
 .iconBtn:hover { background: rgba(255,255,255,0.08); }
 
+/* Text helpers */
+.mono { font-family: var(--mono); }
+.small { font-size: 12px; color: var(--muted); }
+
 .footerNote { margin-top: 10px; color: rgba(147,164,191,0.85); font-size: 12px; }
 
+/* Toast */
 .toast {
   position: fixed;
   left: 50%;
@@ -234,45 +288,14 @@ input:focus, select:focus, textarea:focus {
 }
 .toast.show { opacity: 1; }
 
-.inputGroup{
-  display:flex;
-  gap:8px;
-  align-items:center;
-}
-.btn.mini{
-  padding:10px 12px;
-  border-radius:12px;
-  font-weight:900;
-  white-space:nowrap;
-}
-
-.photoRow{
-  display:flex;
-  gap:10px;
-  align-items:center;
-}
-.thumb{
-  width:80px;
-  height:80px;
-  object-fit:contain; /* show FULL image */
-  border-radius:12px;
-  border:1px solid var(--border);
-  background: rgba(255,255,255,0.06);
-  padding:6px;
-}
-.badge.batch {
-  border-color: rgba(168, 85, 247, 0.28);
-  background: rgba(168, 85, 247, 0.10);
-}
-
-/* Top tabs */
-.tabs{
+/* Tabs */
+.tabs {
   display:flex;
   gap:8px;
   flex-wrap:wrap;
   margin-top:6px;
 }
-.tabBtn{
+.tabBtn {
   border:1px solid rgba(255,255,255,0.16);
   background: rgba(255,255,255,0.06);
   color: rgba(255,255,255,0.9);
@@ -284,26 +307,6 @@ input:focus, select:focus, textarea:focus {
 .tabBtn.active{
   background: rgba(59,130,246,0.25);
   border-color: rgba(59,130,246,0.55);
-}
-
-/* Views */
-.view{ display:none; }
-.view.active{ display:block; }
-
-/* Make single-view layout feel nicer */
-.view .card{ margin-bottom:16px; }
-
-html, body {
-  height: 100%;
-  min-height: 100%;
-  background: #0b1220;        /* fallback color */
-}
-
-body {
-  min-height: 100vh;
-  background-repeat: no-repeat;
-  background-size: cover;
-  background-attachment: fixed; /* keeps gradient stable on scroll */
 }
 
 
