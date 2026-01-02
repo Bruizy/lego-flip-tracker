@@ -1,4 +1,3 @@
-<!-- index.html (FULL UPDATED) -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -23,25 +22,25 @@
       <div class="logo">🧱</div>
       <div>
         <div class="title">Lego Flip Tracker</div>
-        <div class="subtitle">
-          <div id="installHint" style="margin-bottom:6px;">Inventory → Sell → Expenses → Stats</div>
+        <div class="subtitle" id="installHint">Inventory → Sell → Trade → Expenses → Stats</div>
 
-          <div class="tabs" id="topTabs">
-            <button class="tabBtn active" data-view="viewInventory" type="button">Inventory</button>
-            <button class="tabBtn" data-view="viewSell" type="button">Sell</button>
-            <button class="tabBtn" data-view="viewExpenses" type="button">Expenses</button>
-            <button class="tabBtn" data-view="viewStats" type="button">Stats</button>
-          </div>
+        <div class="tabs" role="tablist" aria-label="Views">
+          <button class="tabBtn active" data-view="viewInventory" type="button">Inventory</button>
+          <button class="tabBtn" data-view="viewSell" type="button">Sell</button>
+          <button class="tabBtn" data-view="viewTrade" type="button">Trade</button>
+          <button class="tabBtn" data-view="viewExpenses" type="button">Expenses</button>
+          <button class="tabBtn" data-view="viewStats" type="button">Stats</button>
         </div>
       </div>
     </div>
 
     <div class="actions">
       <button class="btn secondary" id="apiKeyBtn" title="Set Rebrickable API Key">API Key</button>
+
       <button class="btn secondary" id="exportBtn" title="Export JSON">Export</button>
 
       <label class="btn secondary file">
-        Import
+        Import JSON
         <input type="file" id="importInput" accept="application/json" />
       </label>
 
@@ -55,420 +54,519 @@
   </header>
 
   <main class="container">
-    <section class="grid">
 
-      <!-- VIEW: Inventory -->
-      <section class="view active" id="viewInventory">
-        <section class="card">
-          <h2>Add Inventory (Batch Purchase)</h2>
+    <!-- INVENTORY -->
+    <section class="view active" id="viewInventory">
+      <section class="card full">
+        <h2>Add Inventory</h2>
 
-          <form id="invForm">
-            <div class="row">
-              <label>
-                Batch #
-                <input name="batch" />
-              </label>
-              <label>
-                Purchase Date
-                <input type="date" name="purchaseDate" required />
-              </label>
-            </div>
+        <form id="invForm">
+          <div class="row">
+            <label>
+              Set / Item Name
+              <input name="name" required />
+            </label>
 
-            <div class="row">
-              <label>
-                Bought From
-                <input name="boughtFrom" />
-              </label>
-              <label>
-                Buy Payment Type
-                <select name="buyPayment">
-                  <option value="">—</option>
-                  <option>Cash</option>
-                  <option>Debit</option>
-                  <option>Credit</option>
-                  <option>PayPal</option>
-                  <option>eTransfer</option>
-                  <option>Gift Card</option>
-                  <option>Other</option>
-                </select>
-              </label>
-            </div>
+            <label>
+              Set Number
+              <div class="inputGroup">
+                <input name="setNumber" />
+                <button class="btn mini" type="button" id="invLookupBtn">Lookup</button>
+              </div>
+            </label>
+          </div>
 
-            <div class="row">
-              <label>
-                Condition
-                <select name="condition" required>
-                  <option value="new_sealed">New (sealed)</option>
-                  <option value="new_openbox">New (open box)</option>
-                  <option value="used_complete">Used (complete)</option>
-                  <option value="used_incomplete">Used (incomplete)</option>
-                </select>
-              </label>
+          <div class="row">
+            <label>
+              Purchase Date
+              <input type="date" name="purchaseDate" required />
+            </label>
 
-              <label>
-                Material Cost (per item)
-                <input type="number" step="0.01" min="0" name="materialCost" value="0" />
-              </label>
-            </div>
+            <label>
+              Batch
+              <input name="batch" list="batchList" />
+              <datalist id="batchList"></datalist>
+            </label>
+          </div>
 
-            <div class="row">
-              <label>
-                Box Included
-                <select name="boxIncluded" required>
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </label>
-
-              <label>
-                Manual Included
-                <select name="manualIncluded" required>
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </label>
-            </div>
-
-            <div class="row">
-              <label>
-                Set Number
-                <div class="inputGroup">
-                  <input name="setNumber" />
-                  <button class="btn mini" type="button" id="invLookupBtn" title="Lookup name + photo">Lookup</button>
-                </div>
-              </label>
-
-              <label>
-                Set / Item Name
-                <input name="name" placeholder="Auto-fills from Lookup (or type)" required />
-              </label>
-            </div>
-
-            <div class="row">
-              <label>
-                Purchase Cost ($)
-                <input type="number" step="0.01" min="0" name="purchaseCost" required />
-              </label>
-
-              <label>
-                Photo (from lookup)
-                <div class="photoRow">
-                  <img id="invPhotoPreview" class="thumb" alt="Set preview" />
-                </div>
-              </label>
-            </div>
-
-            <input type="hidden" name="setImageUrl" />
-            <input type="hidden" name="id" /> <!-- used for edit -->
-
-            <div class="row buttons">
-              <button class="btn primary" type="submit" id="invSaveBtn">Save Inventory</button>
-              <button class="btn" type="button" id="invResetBtn">Clear</button>
-            </div>
-          </form>
-        </section>
-
-        <section class="card full">
-          <div class="listHeader">
-            <h2>Inventory & Sales</h2>
-            <div class="filters">
-              <input id="searchInput" placeholder="Search name / set # / marketplaces / buyer..." />
-              <select id="statusFilter">
-                <option value="all">All</option>
-                <option value="in_stock">In Stock</option>
-                <option value="sold">Sold</option>
-              </select>
-
-              <select id="conditionFilter" title="Filter by condition">
-                <option value="all">All Conditions</option>
+          <div class="row">
+            <label>
+              Condition
+              <select name="condition" required>
                 <option value="new_sealed">New (sealed)</option>
                 <option value="new_openbox">New (open box)</option>
                 <option value="used_complete">Used (complete)</option>
                 <option value="used_incomplete">Used (incomplete)</option>
               </select>
+            </label>
 
-              <select id="batchFilter" title="Filter by batch">
-                <option value="all">All Batches</option>
+            <label>
+              Set Photo (auto)
+              <div class="photoRow">
+                <img id="invPhotoPreview" class="thumb" alt="Set preview" />
+              </div>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Bought From
+              <input name="boughtFrom" />
+            </label>
+
+            <label>
+              Buy Payment
+              <select name="buyPayment">
+                <option value=""></option>
+                <option>Cash</option>
+                <option>Debit</option>
+                <option>Credit</option>
+                <option>PayPal</option>
+                <option>eTransfer</option>
+                <option>Gift Card</option>
+                <option>Other</option>
               </select>
-            </div>
+            </label>
           </div>
 
-          <div class="tableWrap">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Item</th>
-                  <th>Purchase</th>
-                  <th>Sold</th>
-                  <th>Revenue</th>
-                  <th>Profit</th>
-                  <th>Sold On</th>
-                  <th>Buyer</th>
-                  <th>Condition</th>
-                  <th>Batch</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="invTbody"></tbody>
-            </table>
+          <div class="row">
+            <label>
+              Purchase Cost ($)
+              <input type="number" step="0.01" min="0" name="purchaseCost" required />
+            </label>
+
+            <label>
+              Per-set Material Cost ($)
+              <input type="number" step="0.01" min="0" name="materialCost" value="0" required />
+            </label>
           </div>
 
-          <div class="footerNote">
-            Tip: Sold items can be edited from the <b>Sell</b> tab by selecting the same item again (app.js update).
-          </div>
-        </section>
-      </section>
-
-      <!-- VIEW: Sell -->
-      <section class="view" id="viewSell">
-        <section class="card">
-          <h2>Sell Item (Select from Inventory)</h2>
-
-          <form id="saleForm">
-            <div class="row">
-              <label>
-                Select Item (search)
-                <input name="invPick" id="invPick" list="inventoryList" placeholder="Type set # or name..." />
-                <datalist id="inventoryList"></datalist>
-                <input type="hidden" name="inventoryId" />
-                <input type="hidden" name="saleId" /> <!-- if editing an existing sale -->
-              </label>
-
-              <label>
-                Sold Date
-                <input type="date" name="soldDate" required />
-              </label>
-            </div>
-
-            <div class="row">
-              <label>
-                Sold Price ($)
-                <input type="number" step="0.01" min="0" name="soldPrice" required />
-              </label>
-
-              <label>
-                Fees / Shipping Out ($)
-                <input type="number" step="0.01" min="0" name="fees" value="0" required />
-              </label>
-            </div>
-
-            <div class="row">
-              <label>
-                Sold Location (Marketplace)
-                <input name="soldOn" placeholder="" />
-              </label>
-
-              <label>
-                Sell Payment Type
-                <select name="sellPayment">
-                  <option value="">—</option>
-                  <option>Cash</option>
-                  <option>Debit</option>
-                  <option>Credit</option>
-                  <option>PayPal</option>
-                  <option>eTransfer</option>
-                  <option>Marketplace Payout</option>
-                  <option>Other</option>
-                </select>
-              </label>
-            </div>
-
-            <div class="row">
-              <label>
-                Buyer
-                <input name="buyer" placeholder="Name / username / short label" />
-              </label>
-
-              <label>
-                Preview
-                <div class="photoRow">
-                  <img id="salePhotoPreview" class="thumb" alt="Set preview" />
-                </div>
-              </label>
-            </div>
-
-            <div class="row">
-              <label style="grid-column: 1 / -1;">
-                Notes
-                <textarea name="notes" rows="3"></textarea>
-              </label>
-            </div>
-
-            <div class="row buttons">
-              <button class="btn primary" type="submit" id="saleSaveBtn">Save Sale</button>
-              <button class="btn" type="button" id="saleResetBtn">Clear</button>
-            </div>
-          </form>
-
-          <div class="footerNote">
-            If you select an item that’s already sold, the form will load the existing sale so you can <b>Edit</b> it.
-          </div>
-        </section>
-      </section>
-
-      <!-- VIEW: Expenses -->
-      <section class="view" id="viewExpenses">
-        <section class="card">
-          <div class="listHeader">
-            <h2>Expenses</h2>
-          </div>
-
-          <form id="expenseForm">
-            <div class="row">
-              <label>
-                Amount ($)
-                <input type="number" step="0.01" min="0" name="amount" required />
-              </label>
-
-              <label>
-                Category
-                <select name="category" required>
-                  <option value="Supplies">Supplies</option>
-                  <option value="Parts">Parts</option>
-                  <option value="Shipping">Shipping</option>
-                  <option value="Gas">Gas</option>
-                  <option value="Fees (other)">Fees (other)</option>
-                  <option value="Other">Other</option>
-                </select>
-              </label>
-            </div>
-
-            <div class="row">
-              <label>
-                Date
-                <input type="date" name="date" required />
-              </label>
-
-              <label>
-                Note (optional)
-                <input name="note" />
-              </label>
-            </div>
-
-            <div class="row buttons">
-              <button class="btn primary" type="submit">Add Expense</button>
-              <button class="btn" type="button" id="clearExpensesBtn">Clear All Expenses</button>
-            </div>
-          </form>
-
-          <div id="expenseSummary" style="margin-top:12px;"></div>
-
-          <div class="tableWrap" style="margin-top:12px;">
-            <table class="table" style="min-width:700px;">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Category</th>
-                  <th>Note</th>
-                  <th>Amount</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="expenseTbody"></tbody>
-            </table>
-          </div>
-        </section>
-      </section>
-
-      <!-- VIEW: Stats -->
-      <section class="view" id="viewStats">
-        <section class="card">
-          <h2>Stats</h2>
-
-          <!-- Filters for deeper analysis -->
-          <div class="listHeader" style="margin-bottom:10px;">
-            <div class="filters">
-              <select id="statsRange">
-                <option value="all">All Time</option>
-                <option value="ytd">Year to Date</option>
-                <option value="90d">Last 90 Days</option>
-                <option value="30d">Last 30 Days</option>
+          <div class="row">
+            <label>
+              Box Included
+              <select name="boxIncluded" required>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
               </select>
+            </label>
 
-              <select id="statsBatchFilter" title="Stats batch filter">
-                <option value="all">All Batches</option>
+            <label>
+              Manual Included
+              <select name="manualIncluded" required>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
               </select>
-            </div>
+            </label>
           </div>
 
-          <!-- KPI grid (expanded / more specific) -->
-          <div class="kpis">
-            <div class="kpi"><div class="kpiLabel">Revenue</div><div class="kpiValue" id="kpiRevenue">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">COGS (Purchase)</div><div class="kpiValue" id="kpiPurchase">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Material</div><div class="kpiValue" id="kpiMaterial">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Shipping Out</div><div class="kpiValue" id="kpiShipping">$0.00</div></div>
+          <input type="hidden" name="id" />
+          <input type="hidden" name="setImageUrl" />
 
-            <div class="kpi"><div class="kpiLabel">Other Overhead</div><div class="kpiValue" id="kpiOther">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Net Profit</div><div class="kpiValue" id="kpiProfit">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Net Margin</div><div class="kpiValue" id="kpiMargin">0%</div></div>
-            <div class="kpi"><div class="kpiLabel">Avg Profit / Sale</div><div class="kpiValue" id="kpiAvgProfit">$0.00</div></div>
-
-            <div class="kpi"><div class="kpiLabel">Invested (Unsold)</div><div class="kpiValue" id="kpiInvestedUnsold">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Unsold Items</div><div class="kpiValue" id="kpiUnsoldCount">0</div></div>
-            <div class="kpi"><div class="kpiLabel">Sell-through</div><div class="kpiValue" id="kpiSellThrough">0%</div></div>
-            <div class="kpi"><div class="kpiLabel">Avg Days to Sell</div><div class="kpiValue" id="kpiAvgDays">0</div></div>
+          <div class="row buttons">
+            <button class="btn primary" type="submit" id="invSaveBtn">Save Inventory</button>
+            <button class="btn" type="button" id="invResetBtn">Clear</button>
           </div>
-
-          <!-- Charts (expanded for deeper analysis) -->
-          <div class="charts">
-            <div class="chartCard">
-              <div class="chartTitle">Net Profit Over Time (by sold month)</div>
-              <canvas id="profitLine"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Revenue vs Profit (by month)</div>
-              <canvas id="revProfitCombo"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Profit by Marketplace (Top 10)</div>
-              <canvas id="marketBar"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Revenue by Marketplace (Top 10)</div>
-              <canvas id="marketRevenueBar"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Profit by Condition</div>
-              <canvas id="conditionBar"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Sell-through by Condition</div>
-              <canvas id="sellThroughCond"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Profit by Batch (Top 10)</div>
-              <canvas id="batchBar"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Spent vs Revenue by Batch (Top 10)</div>
-              <canvas id="batchSpendRev"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Buyer Breakdown (Top 10)</div>
-              <canvas id="buyerBar"></canvas>
-            </div>
-
-            <div class="chartCard">
-              <div class="chartTitle">Fees + Shipping Out Over Time</div>
-              <canvas id="feesLine"></canvas>
-            </div>
-          </div>
-
-          <div class="footerNote">
-            Stats are computed from: Inventory + Sales + Expenses. Batch filters apply across all charts/KPIs.
-          </div>
-        </section>
+        </form>
       </section>
 
+      <section class="card full">
+        <div class="listHeader">
+          <h2>Inventory List</h2>
+          <div class="filters">
+            <input id="searchInput" placeholder="Search..." />
+            <select id="statusFilter" title="Status">
+              <option value="all">All</option>
+              <option value="in_stock">In Stock</option>
+              <option value="sold">Sold</option>
+            </select>
+
+            <select id="conditionFilter" title="Condition">
+              <option value="all">All Conditions</option>
+              <option value="new_sealed">New (sealed)</option>
+              <option value="new_openbox">New (open box)</option>
+              <option value="used_complete">Used (complete)</option>
+              <option value="used_incomplete">Used (incomplete)</option>
+            </select>
+
+            <select id="batchFilter" title="Batch">
+              <option value="all">All Batches</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="tableWrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Purchase</th>
+                <th>Sold</th>
+                <th>Revenue</th>
+                <th>Profit</th>
+                <th>Sold On</th>
+                <th>City</th>
+                <th>Condition</th>
+                <th>Batch</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="invTbody"></tbody>
+          </table>
+        </div>
+
+        <div class="footerNote">Tip: use 🧾 to sell/edit sale. Trade moves cost into a new item.</div>
+      </section>
     </section>
+
+    <!-- SELL -->
+    <section class="view" id="viewSell">
+      <section class="card full">
+        <h2>Sell Item</h2>
+
+        <div class="row" style="margin-bottom:10px;">
+          <label style="grid-column:1 / -1;">
+            Pick Unsold Inventory Item
+            <input id="invPick" list="inventoryList" placeholder="Type name or set #..." />
+            <datalist id="inventoryList"></datalist>
+          </label>
+        </div>
+
+        <form id="saleForm">
+          <div class="row">
+            <label>
+              Sold Date
+              <input type="date" name="soldDate" required />
+            </label>
+
+            <label>
+              Sold On (Marketplace)
+              <input name="soldOn" />
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              City
+              <input name="city" />
+            </label>
+
+            <label>
+              Buyer
+              <input name="buyer" />
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Item Price ($)
+              <input type="number" step="0.01" min="0" name="itemPrice" required />
+            </label>
+
+            <label>
+              Shipping Charged ($)
+              <input type="number" step="0.01" min="0" name="shippingCharged" value="0" required />
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Shipping You Paid ($)
+              <input type="number" step="0.01" min="0" name="shippingPaid" value="0" required />
+            </label>
+
+            <label>
+              Platform Fees (eBay fees, etc) ($)
+              <input type="number" step="0.01" min="0" name="platformFees" value="0" required />
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Sell Payment Type
+              <select name="sellPayment">
+                <option value=""></option>
+                <option>Cash</option>
+                <option>Debit</option>
+                <option>Credit</option>
+                <option>PayPal</option>
+                <option>eTransfer</option>
+                <option>Marketplace Payout</option>
+                <option>Other</option>
+              </select>
+            </label>
+
+            <label>
+              Set Photo
+              <div class="photoRow">
+                <img id="salePhotoPreview" class="thumb" alt="Sale preview" />
+              </div>
+            </label>
+          </div>
+
+          <div class="row">
+            <label style="grid-column:1 / -1;">
+              Notes
+              <textarea name="notes" rows="3"></textarea>
+            </label>
+          </div>
+
+          <input type="hidden" name="inventoryId" />
+          <input type="hidden" name="saleId" />
+
+          <div class="row buttons">
+            <button class="btn primary" type="submit" id="saleSaveBtn">Save Sale</button>
+            <button class="btn" type="button" id="saleResetBtn">Clear</button>
+          </div>
+        </form>
+
+        <div class="footerNote">Sell picker shows unsold only. Edit sold items from Inventory list 🧾.</div>
+      </section>
+    </section>
+
+    <!-- TRADE -->
+    <section class="view" id="viewTrade">
+      <section class="card full">
+        <h2>Trade / Exchange</h2>
+        <div class="small" style="margin-bottom:10px;">
+          Select multiple unsold items to exchange. Their cost is transferred into the new item.
+          Selected items become “Exchanged” and are excluded from stats totals (no double counting).
+        </div>
+
+        <div class="tableWrap" style="margin-bottom:12px;">
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="min-width:60px;">Pick</th>
+                <th>Item</th>
+                <th>Batch</th>
+                <th>Cost</th>
+              </tr>
+            </thead>
+            <tbody id="tradePickTbody"></tbody>
+          </table>
+        </div>
+
+        <form id="tradeForm">
+          <div class="row">
+            <label>
+              New Item Name
+              <input name="name" required />
+            </label>
+
+            <label>
+              New Item Set #
+              <div class="inputGroup">
+                <input name="setNumber" />
+                <button class="btn mini" type="button" id="tradeLookupBtn">Lookup</button>
+              </div>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Trade Date
+              <input type="date" name="tradeDate" required />
+            </label>
+
+            <label>
+              New Item Batch
+              <input name="batch" list="batchList" />
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              New Item Condition
+              <select name="condition" required>
+                <option value="new_sealed">New (sealed)</option>
+                <option value="new_openbox">New (open box)</option>
+                <option value="used_complete">Used (complete)</option>
+                <option value="used_incomplete">Used (incomplete)</option>
+              </select>
+            </label>
+
+            <label>
+              New Item Photo
+              <div class="photoRow">
+                <img id="tradePhotoPreview" class="thumb" alt="Trade preview" />
+              </div>
+            </label>
+          </div>
+
+          <div class="row">
+            <label style="grid-column:1 / -1;">
+              Notes (optional)
+              <input name="notes" />
+            </label>
+          </div>
+
+          <input type="hidden" name="setImageUrl" />
+
+          <div class="row buttons">
+            <button class="btn primary" type="submit" id="tradeBtn">Complete Trade</button>
+            <button class="btn" type="button" id="tradeClearBtn">Clear Selection</button>
+          </div>
+
+          <div class="footerNote">
+            Transfer preview: <span class="badge" id="tradeTotalBadge">Selected Cost: $0.00</span>
+          </div>
+        </form>
+      </section>
+    </section>
+
+    <!-- EXPENSES -->
+    <section class="view" id="viewExpenses">
+      <section class="card full">
+        <h2>Expenses</h2>
+
+        <form id="expenseForm">
+          <div class="row">
+            <label>
+              Amount ($)
+              <input type="number" step="0.01" min="0" name="amount" required />
+            </label>
+
+            <label>
+              Category
+              <select name="category" required>
+                <option value="Supplies">Supplies</option>
+                <option value="Parts">Parts</option>
+                <option value="Shipping">Shipping</option>
+                <option value="Gas">Gas</option>
+                <option value="Fees (other)">Fees (other)</option>
+                <option value="Other">Other</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Date
+              <input type="date" name="date" required />
+            </label>
+
+            <label>
+              Note
+              <input name="note" />
+            </label>
+          </div>
+
+          <div class="row buttons">
+            <button class="btn primary" type="submit">Add Expense</button>
+            <button class="btn" type="button" id="clearExpensesBtn">Clear All</button>
+          </div>
+        </form>
+
+        <div style="margin-top:12px;" id="expenseSummary"></div>
+
+        <div class="tableWrap" style="margin-top:12px;">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Category</th>
+                <th>Note</th>
+                <th>Amount</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="expenseTbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <!-- STATS -->
+    <section class="view" id="viewStats">
+      <section class="card full">
+        <div class="listHeader">
+          <h2>Stats</h2>
+          <div class="filters">
+            <select id="statsRange" title="Range">
+              <option value="all">All Time</option>
+              <option value="30d">Last 30 Days</option>
+              <option value="90d">Last 90 Days</option>
+              <option value="ytd">Year to Date</option>
+            </select>
+
+            <select id="statsBatchFilter" title="Batch">
+              <option value="all">All Batches</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- KPI grid -->
+        <div class="kpis kpisWide">
+          <div class="kpi"><div class="kpiLabel">Revenue</div><div class="kpiValue" id="kpiRevenue">$0.00</div></div>
+          <div class="kpi"><div class="kpiLabel">Purchase Cost</div><div class="kpiValue" id="kpiPurchase">$0.00</div></div>
+          <div class="kpi"><div class="kpiLabel">Material Total</div><div class="kpiValue" id="kpiMaterial">$0.00</div></div>
+          <div class="kpi"><div class="kpiLabel">Shipping Total</div><div class="kpiValue" id="kpiShipping">$0.00</div></div>
+
+          <div class="kpi"><div class="kpiLabel">Other Overhead</div><div class="kpiValue" id="kpiOther">$0.00</div></div>
+          <div class="kpi"><div class="kpiLabel">Net Profit</div><div class="kpiValue" id="kpiProfit">$0.00</div></div>
+          <div class="kpi"><div class="kpiLabel">Net Margin</div><div class="kpiValue" id="kpiMargin">0%</div></div>
+          <div class="kpi"><div class="kpiLabel">Avg Profit / Sale</div><div class="kpiValue" id="kpiAvgProfit">$0.00</div></div>
+
+          <div class="kpi"><div class="kpiLabel">Invested (Unsold)</div><div class="kpiValue" id="kpiInvestedUnsold">$0.00</div></div>
+          <div class="kpi"><div class="kpiLabel">Unsold Count</div><div class="kpiValue" id="kpiUnsoldCount">0</div></div>
+          <div class="kpi"><div class="kpiLabel">Sell-through</div><div class="kpiValue" id="kpiSellThrough">0%</div></div>
+          <div class="kpi"><div class="kpiLabel">Avg Days to Sell</div><div class="kpiValue" id="kpiAvgDays">0</div></div>
+        </div>
+
+        <div class="charts chartsWide">
+          <div class="chartCard">
+            <div class="chartTitle">Net Profit Over Time</div>
+            <canvas id="profitLine"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Revenue vs Net Profit</div>
+            <canvas id="revProfitCombo"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Profit by Marketplace</div>
+            <canvas id="marketBar"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Revenue by Marketplace</div>
+            <canvas id="marketRevenueBar"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Profit by City</div>
+            <canvas id="cityBar"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Profit by Condition</div>
+            <canvas id="conditionBar"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Sell-through by Condition</div>
+            <canvas id="sellThroughCond"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Profit by Batch</div>
+            <canvas id="batchBar"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Spent vs Revenue by Batch</div>
+            <canvas id="batchSpendRev"></canvas>
+          </div>
+
+          <div class="chartCard">
+            <div class="chartTitle">Fees + Shipping Over Time</div>
+            <canvas id="feesLine"></canvas>
+          </div>
+        </div>
+      </section>
+    </section>
+
   </main>
 
   <div class="toast" id="toast" aria-live="polite"></div>
