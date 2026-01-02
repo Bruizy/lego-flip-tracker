@@ -1,4 +1,4 @@
-/* app.js */
+/* app.js (FULL) */
 "use strict";
 
 /** ---------- Utilities ---------- */
@@ -48,7 +48,6 @@ function setView(viewId) {
 
   window.scrollTo({ top: 0, behavior: "smooth" });
 
-  // Chart canvases sometimes need a rerender once visible
   if (viewId === "viewStats") {
     try { rerender(); } catch {}
   }
@@ -141,13 +140,64 @@ const EXPENSE_CATEGORY_MAP = {
   Other: "other"
 };
 
+/** ---------- CSV Import helpers ---------- */
+function parseMoney(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return 0;
+  const cleaned = s.replace(/[^0-9.\-]/g, "");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (ch === '"' && inQuotes && next === '"') { cur += '"'; i++; continue; }
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+
+    if (ch === "," && !inQuotes) { row.push(cur); cur = ""; continue; }
+
+    if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && next === "\n") i++;
+      row.push(cur); cur = "";
+      if (row.some(c => c.trim() !== "")) rows.push(row);
+      row = [];
+      continue;
+    }
+    cur += ch;
+  }
+  row.push(cur);
+  if (row.some(c => c.trim() !== "")) rows.push(row);
+
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1).map(cols => {
+    const obj = {};
+    headers.forEach((h, idx) => obj[h] = (cols[idx] ?? "").trim());
+    return obj;
+  });
+}
+function csvBool(v) {
+  const s = (v || "").trim().toLowerCase();
+  if (!s) return "yes";
+  if (["y", "yes", "true", "1"].includes(s)) return "yes";
+  if (["n", "no", "false", "0"].includes(s)) return "no";
+  return "yes";
+}
+
 /** ---------- IndexedDB ---------- */
 const DB_NAME = "legoFlipDB";
-const DB_VERSION = 3; // inventory + sales + expenses
+const DB_VERSION = 3;
 const INVENTORY_STORE = "inventory";
 const SALES_STORE = "sales";
 const EXPENSES_STORE = "expenses";
-const OLD_FLIPS_STORE = "flips"; // legacy
+const OLD_FLIPS_STORE = "flips";
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -170,6 +220,7 @@ function openDB() {
         s.createIndex("soldDate", "soldDate");
         s.createIndex("inventoryId", "inventoryId");
         s.createIndex("soldOn", "soldOn");
+        s.createIndex("buyer", "buyer");
       }
 
       if (!db.objectStoreNames.contains(EXPENSES_STORE)) {
@@ -248,26 +299,15 @@ let profitLineChart = null;
 let marketBarChart = null;
 let conditionBarChart = null;
 let batchBarChart = null;
+let spentBatchBarChart = null;
+let revenueBatchBarChart = null;
 
-/** ---------- Domain: inventory + sales ---------- */
+/** ---------- Domain helpers ---------- */
 function isSoldItem(invItem) {
   return invItem?.status === "sold";
 }
 function getSaleByInventoryId(invId) {
   return sales.find(s => s.inventoryId === invId) || null;
-}
-function calcSaleNet(invItem, saleRec, allocator) {
-  if (!invItem || !saleRec) return null;
-
-  const revenue = toNum(saleRec.soldPrice);
-  const purchase = toNum(invItem.purchaseCost);
-  const material = toNum(invItem.materialCost);
-  const shipping = toNum(saleRec.fees);
-
-  const alloc = allocator.allocatedExpenseForSale(saleRec);
-  const profitNet = revenue - purchase - material - shipping - alloc.total;
-
-  return { revenue, purchase, material, shipping, alloc, profitNet };
 }
 
 /** ---------- Expense allocation (by sold month revenue share) ---------- */
@@ -326,6 +366,20 @@ function buildExpenseAllocator(salesList, expensesList) {
   return { expByMonth, allocatedExpenseForSale };
 }
 
+function calcSaleNet(invItem, saleRec, allocator) {
+  if (!invItem || !saleRec) return null;
+
+  const revenue = toNum(saleRec.soldPrice);
+  const purchase = toNum(invItem.purchaseCost);
+  const material = toNum(invItem.materialCost);
+  const shipping = toNum(saleRec.fees);
+
+  const alloc = allocator.allocatedExpenseForSale(saleRec);
+  const profitNet = revenue - purchase - material - shipping - alloc.total;
+
+  return { revenue, purchase, material, shipping, alloc, profitNet };
+}
+
 /** ---------- Rendering helpers ---------- */
 function renderThumb(url, imgSel) {
   const img = $(imgSel);
@@ -347,7 +401,7 @@ function renderItemThumbHTML(url) {
   return `<a href="${safe}" target="_blank" rel="noopener"><img class="thumb clickable" src="${safe}" alt="set" loading="lazy" /></a>`;
 }
 
-/** ---------- Inventory list + filters ---------- */
+/** ---------- Filters + UI lists ---------- */
 function updateBatchFilter() {
   const batches = [...new Set(inventory.map(i => normalizeBatch(i.batch)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const bf = $("#batchFilter");
@@ -414,9 +468,9 @@ function getFilteredInventoryView() {
 
     const sale = getSaleByInventoryId(i.id);
     const hay = [
-      i.name, i.setNumber, i.boughtFrom, i.buyPayment,
-      i.batch, CONDITION_LABELS[itemCond] || "",
-      sale?.soldOn || "", sale?.sellPayment || "", sale?.notes || ""
+      i.name, i.setNumber, i.boughtFrom, i.buyPayment, i.batch,
+      CONDITION_LABELS[itemCond] || "",
+      sale?.soldOn || "", sale?.sellPayment || "", sale?.buyer || ""
     ].join(" ").toLowerCase();
 
     return hay.includes(q);
@@ -458,14 +512,17 @@ function renderExpensesTable() {
       <td>${escapeHtml(e.category || "")}</td>
       <td>${escapeHtml(e.note || "")}</td>
       <td class="mono">${money(toNum(e.amount))}</td>
-      <td><div class="rowActions"><button class="iconBtn" data-exp-del="${e.id}" title="Delete">🗑️</button></div></td>
+      <td><div class="rowActions"><button class="iconBtn" data-exp-del="${e.id}" type="button" title="Delete">🗑️</button></div></td>
     `;
     tb.appendChild(tr);
   }
 }
 
-/** ---------- KPIs ---------- */
-function renderKPIs(allocator) {
+/** ---------- KPIs + Stats ---------- */
+function renderKPIsAndStats(allocator) {
+  const inventoryById = new Map(inventory.map(i => [i.id, i]));
+
+  // Sold-side totals (include allocated expenses)
   let revenue = 0;
   let purchaseCost = 0;
   let materialCost = 0;
@@ -473,7 +530,7 @@ function renderKPIs(allocator) {
   let otherCost = 0;
 
   for (const s of sales) {
-    const inv = inventory.find(i => i.id === s.inventoryId);
+    const inv = inventoryById.get(s.inventoryId);
     if (!inv) continue;
 
     const r = toNum(s.soldPrice);
@@ -481,18 +538,20 @@ function renderKPIs(allocator) {
     const m = toNum(inv.materialCost);
     const sh = toNum(s.fees);
 
+    const alloc = allocator.allocatedExpenseForSale(s);
+
     revenue += r;
     purchaseCost += p;
-    materialCost += m;
-    shippingCost += sh;
-
-    const alloc = allocator.allocatedExpenseForSale(s);
-    materialCost += alloc.material;
-    shippingCost += alloc.shipping;
+    materialCost += m + alloc.material;
+    shippingCost += sh + alloc.shipping;
     otherCost += alloc.other;
   }
 
   const profit = revenue - purchaseCost - materialCost - shippingCost - otherCost;
+
+  // Unsold invested
+  const unsold = inventory.filter(i => i.status !== "sold");
+  const investedUnsold = unsold.reduce((sum, i) => sum + toNum(i.purchaseCost) + toNum(i.materialCost), 0);
 
   $("#kpiRevenue") && ($("#kpiRevenue").textContent = money(revenue));
   $("#kpiPurchase") && ($("#kpiPurchase").textContent = money(purchaseCost));
@@ -500,9 +559,11 @@ function renderKPIs(allocator) {
   $("#kpiShipping") && ($("#kpiShipping").textContent = money(shippingCost));
   $("#kpiOther") && ($("#kpiOther").textContent = money(otherCost));
   $("#kpiProfit") && ($("#kpiProfit").textContent = money(profit));
+  $("#kpiInvestedUnsold") && ($("#kpiInvestedUnsold").textContent = money(investedUnsold));
+  $("#kpiUnsoldCount") && ($("#kpiUnsoldCount").textContent = String(unsold.length));
 }
 
-/** ---------- Inventory table ---------- */
+/** ---------- Inventory table (compact height + buyer shown) ---------- */
 function renderInventoryTable(viewList, allocator) {
   const tb = $("#invTbody");
   if (!tb) return;
@@ -525,35 +586,41 @@ function renderInventoryTable(viewList, allocator) {
 
     const cond = conditionBadge(inv.condition);
     const batch = batchBadge(inv.batch);
-
     const itemTitle = `${inv.name || "(unnamed)"}${inv.setNumber ? ` • #${inv.setNumber}` : ""}`;
 
-    let revenue = 0;
-    let profit = 0;
+    let revenue = null;
+    let profit = null;
     let soldOn = "—";
+    let buyer = "—";
+    let soldDate = "—";
 
     if (sold && sale) {
       const net = calcSaleNet(inv, sale, allocator);
-      revenue = net?.revenue || 0;
-      profit = net?.profitNet || 0;
+      revenue = net?.revenue ?? 0;
+      profit = net?.profitNet ?? 0;
       soldOn = sale.soldOn || "—";
+      buyer = sale.buyer || "—";
+      soldDate = sale.soldDate || "—";
     }
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
-        <div style="display:flex;gap:10px;align-items:flex-start;">
+        <div style="display:flex;gap:10px;align-items:center;">
           ${renderItemThumbHTML(inv.setImageUrl)}
-          <div style="display:flex;flex-direction:column;gap:6px;">
-            <div style="font-weight:900;">${escapeHtml(itemTitle)}</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <div style="min-width:0;">
+            <div style="font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              ${escapeHtml(itemTitle)}
+            </div>
+
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
               ${statusBadge}
               ${cond}
+              ${normalizeBatch(inv.batch) ? batch : ""}
+              ${inv.boxIncluded === "yes" ? `<span class="badge">📦</span>` : ""}
+              ${inv.manualIncluded === "yes" ? `<span class="badge">📘</span>` : ""}
               ${inv.boughtFrom ? `<span class="badge">🛒 ${escapeHtml(inv.boughtFrom)}</span>` : ""}
               ${inv.buyPayment ? `<span class="badge">💳 ${escapeHtml(inv.buyPayment)}</span>` : ""}
-              ${inv.boxIncluded === "yes" ? `<span class="badge">📦 Box</span>` : `<span class="badge">📭 No Box</span>`}
-              ${inv.manualIncluded === "yes" ? `<span class="badge">📘 Manual</span>` : `<span class="badge">📄 No Manual</span>`}
-              ${normalizeBatch(inv.batch) ? batch : ""}
             </div>
           </div>
         </div>
@@ -561,29 +628,30 @@ function renderInventoryTable(viewList, allocator) {
 
       <td class="mono">
         <div>${escapeHtml(inv.purchaseDate || "—")}</div>
-        <div class="small">Buy: ${money(toNum(inv.purchaseCost))}</div>
+        <div class="small">${money(toNum(inv.purchaseCost))}</div>
       </td>
 
       <td class="mono">
-        <div>${escapeHtml(sale?.soldDate || "—")}</div>
-        <div class="small">${sold ? `Fees: ${money(toNum(sale?.fees))}` : ""}</div>
+        <div>${escapeHtml(soldDate)}</div>
+        <div class="small">${sold ? money(toNum(sale?.fees)) : ""}</div>
       </td>
 
       <td class="mono">${sold ? money(revenue) : "—"}</td>
 
-      <td class="mono" style="font-weight:900;color:${profit >= 0 ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)"};">
+      <td class="mono" style="font-weight:900;color:${(profit ?? 0) >= 0 ? "rgba(34,197,94,0.95)" : "rgba(239,68,68,0.95)"};">
         ${sold ? money(profit) : "—"}
       </td>
 
       <td>${escapeHtml(soldOn)}</td>
+      <td>${escapeHtml(buyer)}</td>
       <td>${cond}</td>
       <td>${batch}</td>
 
       <td>
         <div class="rowActions">
-          <button class="iconBtn" data-inv-edit="${inv.id}" title="Edit">✏️</button>
-          <button class="iconBtn" data-inv-del="${inv.id}" title="Delete">🗑️</button>
-          ${sold ? `<button class="iconBtn" data-sale-del="${inv.id}" title="Delete Sale">↩️</button>` : ""}
+          <button class="iconBtn" data-inv-edit="${inv.id}" type="button" title="Edit">✏️</button>
+          <button class="iconBtn" data-inv-del="${inv.id}" type="button" title="Delete">🗑️</button>
+          ${sold ? `<button class="iconBtn" data-sale-del="${inv.id}" type="button" title="Delete Sale">↩️</button>` : ""}
         </div>
       </td>
     `;
@@ -591,15 +659,18 @@ function renderInventoryTable(viewList, allocator) {
   }
 }
 
-/** ---------- Charts (profit AFTER expenses) ---------- */
+/** ---------- Charts (profit AFTER allocated expenses) + batch spent/rev ---------- */
 function renderCharts(allocator) {
   if (!window.Chart) return;
 
+  const inventoryById = new Map(inventory.map(i => [i.id, i]));
+
+  // Profit over time (after allocated expenses)
   const profitByMonth = new Map();
   for (const s of sales) {
     const key = ym(s.soldDate);
     if (!key) continue;
-    const inv = inventory.find(i => i.id === s.inventoryId);
+    const inv = inventoryById.get(s.inventoryId);
     if (!inv) continue;
     const net = calcSaleNet(inv, s, allocator);
     profitByMonth.set(key, (profitByMonth.get(key) || 0) + (net?.profitNet || 0));
@@ -607,9 +678,10 @@ function renderCharts(allocator) {
   const months = [...profitByMonth.keys()].sort();
   const profitVals = months.map(m => profitByMonth.get(m) || 0);
 
+  // Profit by marketplace
   const profitByMarket = new Map();
   for (const s of sales) {
-    const inv = inventory.find(i => i.id === s.inventoryId);
+    const inv = inventoryById.get(s.inventoryId);
     if (!inv) continue;
     const key = (s.soldOn || "").trim() || "Unknown";
     const net = calcSaleNet(inv, s, allocator);
@@ -619,9 +691,10 @@ function renderCharts(allocator) {
   const marketLabels = markets.map(([k]) => k);
   const marketVals = markets.map(([, v]) => v);
 
+  // Profit by condition
   const profitByCond = new Map();
   for (const s of sales) {
-    const inv = inventory.find(i => i.id === s.inventoryId);
+    const inv = inventoryById.get(s.inventoryId);
     if (!inv) continue;
     const c = normalizeCondition(inv.condition);
     const net = calcSaleNet(inv, s, allocator);
@@ -631,9 +704,10 @@ function renderCharts(allocator) {
   const condLabels = condOrder.map(k => CONDITION_LABELS[k]);
   const condVals = condOrder.map(k => profitByCond.get(k) || 0);
 
+  // Profit by batch
   const profitByBatch = new Map();
   for (const s of sales) {
-    const inv = inventory.find(i => i.id === s.inventoryId);
+    const inv = inventoryById.get(s.inventoryId);
     if (!inv) continue;
     const b = normalizeBatch(inv.batch) || "No Batch";
     const net = calcSaleNet(inv, s, allocator);
@@ -643,8 +717,32 @@ function renderCharts(allocator) {
   const batchLabels = batchesTop.map(([k]) => k);
   const batchVals = batchesTop.map(([, v]) => v);
 
+  // Spent by batch (purchase + per-item material only)
+  const spentByBatch = new Map();
+  for (const inv of inventory) {
+    const b = normalizeBatch(inv.batch) || "No Batch";
+    const spent = toNum(inv.purchaseCost) + toNum(inv.materialCost);
+    spentByBatch.set(b, (spentByBatch.get(b) || 0) + spent);
+  }
+  const spentTop = [...spentByBatch.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const spentLabels = spentTop.map(([k]) => k);
+  const spentVals = spentTop.map(([, v]) => v);
+
+  // Revenue by batch
+  const revenueByBatch = new Map();
+  for (const s of sales) {
+    const inv = inventoryById.get(s.inventoryId);
+    if (!inv) continue;
+    const b = normalizeBatch(inv.batch) || "No Batch";
+    revenueByBatch.set(b, (revenueByBatch.get(b) || 0) + toNum(s.soldPrice));
+  }
+  const revenueTop = [...revenueByBatch.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const revenueLabels = revenueTop.map(([k]) => k);
+  const revenueVals = revenueTop.map(([, v]) => v);
+
   const common = { color: "#e5edff", grid: "rgba(255,255,255,0.08)" };
 
+  // Profit line
   const lineEl = $("#profitLine");
   if (lineEl) {
     const ctx = lineEl.getContext("2d");
@@ -677,6 +775,7 @@ function renderCharts(allocator) {
     });
   }
 
+  // Market bar
   const marketEl = $("#marketBar");
   if (marketEl) {
     const ctx = marketEl.getContext("2d");
@@ -707,6 +806,7 @@ function renderCharts(allocator) {
     });
   }
 
+  // Condition bar
   const condEl = $("#conditionBar");
   if (condEl) {
     const ctx = condEl.getContext("2d");
@@ -737,6 +837,7 @@ function renderCharts(allocator) {
     });
   }
 
+  // Batch profit bar
   const batchEl = $("#batchBar");
   if (batchEl) {
     const ctx = batchEl.getContext("2d");
@@ -766,26 +867,88 @@ function renderCharts(allocator) {
       }
     });
   }
+
+  // Spent by batch bar
+  const spentEl = $("#spentBatchBar");
+  if (spentEl) {
+    const ctx = spentEl.getContext("2d");
+    if (spentBatchBarChart) spentBatchBarChart.destroy();
+    spentBatchBarChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: spentLabels.length ? spentLabels : ["—"],
+        datasets: [{
+          label: "Spent",
+          data: spentLabels.length ? spentVals : [0],
+          backgroundColor: "rgba(245,158,11,0.45)",
+          borderColor: "rgba(255,255,255,0.18)",
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: common.color } },
+          tooltip: { callbacks: { label: (c) => ` ${money(c.parsed.y)}` } }
+        },
+        scales: {
+          x: { ticks: { color: common.color }, grid: { color: common.grid } },
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+        }
+      }
+    });
+  }
+
+  // Revenue by batch bar
+  const revEl = $("#revenueBatchBar");
+  if (revEl) {
+    const ctx = revEl.getContext("2d");
+    if (revenueBatchBarChart) revenueBatchBarChart.destroy();
+    revenueBatchBarChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: revenueLabels.length ? revenueLabels : ["—"],
+        datasets: [{
+          label: "Revenue",
+          data: revenueLabels.length ? revenueVals : [0],
+          backgroundColor: "rgba(34,197,94,0.45)",
+          borderColor: "rgba(255,255,255,0.18)",
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: common.color } },
+          tooltip: { callbacks: { label: (c) => ` ${money(c.parsed.y)}` } }
+        },
+        scales: {
+          x: { ticks: { color: common.color }, grid: { color: common.grid } },
+          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } }
+        }
+      }
+    });
+  }
 }
 
 /** ---------- Rerender ---------- */
 function rerender() {
-  const allocator = buildExpenseAllocator(sales, expenses);
-
   updateBatchFilter();
   updateInventoryDatalist();
 
-  renderKPIs(allocator);
-  renderCharts(allocator);
+  const allocator = buildExpenseAllocator(sales, expenses);
 
-  renderExpensesTable();
   renderExpenseSummary();
+  renderExpensesTable();
+
+  renderKPIsAndStats(allocator);
+  renderCharts(allocator);
 
   const view = getFilteredInventoryView();
   renderInventoryTable(view, allocator);
 }
 
-/** ---------- Inventory form ---------- */
+/** ---------- Forms: Inventory ---------- */
 function setInvFormDefaults() {
   const f = $("#invForm");
   if (!f) return;
@@ -805,6 +968,7 @@ function clearInvForm(keepBatch = true) {
   const batch = f.batch.value;
   f.reset();
   if (keepBatch) f.batch.value = batch;
+  delete f.dataset.editId;
   setInvFormDefaults();
 }
 
@@ -823,44 +987,6 @@ async function handleInvLookup() {
   toast("Set info filled ✅");
 }
 
-/** ---------- Sale form ---------- */
-function setSaleFormDefaults() {
-  const f = $("#saleForm");
-  if (!f) return;
-
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, "0");
-  const dd = String(today.getDate()).padStart(2, "0");
-  if (!f.soldDate.value) f.soldDate.value = `${yyyy}-${mm}-${dd}`;
-
-  renderThumb("", "#salePhotoPreview");
-}
-
-function clearSaleForm() {
-  const f = $("#saleForm");
-  if (!f) return;
-  f.reset();
-  f.inventoryId.value = "";
-  setSaleFormDefaults();
-}
-
-function setSaleSelection(invId) {
-  const f = $("#saleForm");
-  if (!f) return;
-
-  const inv = inventory.find(i => i.id === invId);
-  if (!inv) {
-    f.inventoryId.value = "";
-    renderThumb("", "#salePhotoPreview");
-    return;
-  }
-
-  f.inventoryId.value = inv.id;
-  renderThumb(inv.setImageUrl || "", "#salePhotoPreview");
-}
-
-/** ---------- Inventory edit support ---------- */
 function fillInvFormForEdit(invId) {
   const inv = inventory.find(i => i.id === invId);
   if (!inv) return;
@@ -910,11 +1036,107 @@ async function saveInvEditIfNeeded(newItem) {
   return true;
 }
 
+/** ---------- Forms: Sale ---------- */
+function setSaleFormDefaults() {
+  const f = $("#saleForm");
+  if (!f) return;
+
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  if (!f.soldDate.value) f.soldDate.value = `${yyyy}-${mm}-${dd}`;
+
+  renderThumb("", "#salePhotoPreview");
+}
+
+function clearSaleForm() {
+  const f = $("#saleForm");
+  if (!f) return;
+  f.reset();
+  f.inventoryId.value = "";
+  setSaleFormDefaults();
+}
+
+function setSaleSelection(invId) {
+  const f = $("#saleForm");
+  if (!f) return;
+
+  const inv = inventory.find(i => i.id === invId);
+  if (!inv) {
+    f.inventoryId.value = "";
+    renderThumb("", "#salePhotoPreview");
+    return;
+  }
+
+  f.inventoryId.value = inv.id;
+  renderThumb(inv.setImageUrl || "", "#salePhotoPreview");
+}
+
+/** ---------- Expenses actions ---------- */
+async function addExpenseFromForm(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const obj = Object.fromEntries(fd.entries());
+
+  const exp = {
+    id: uid(),
+    amount: toNum(obj.amount),
+    category: (obj.category || "").trim(),
+    date: obj.date || "",
+    note: (obj.note || "").trim(),
+    createdAt: Date.now()
+  };
+
+  if (!exp.amount || exp.amount <= 0) return toast("Expense amount required.");
+  if (!exp.date) return toast("Expense date required.");
+  if (!exp.category) return toast("Category required.");
+
+  await txPut(EXPENSES_STORE, exp);
+  expenses = await txGetAll(EXPENSES_STORE);
+
+  ev.target.reset();
+
+  const d = $("#expenseForm")?.querySelector('input[name="date"]');
+  if (d) {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    d.value = `${yyyy}-${mm}-${dd}`;
+  }
+
+  toast("Expense added ✅");
+  rerender();
+}
+
+async function handleExpensesTableClick(ev) {
+  const btn = ev.target.closest("button");
+  const id = btn?.getAttribute?.("data-exp-del");
+  if (!id) return;
+  await txDelete(EXPENSES_STORE, id);
+  expenses = await txGetAll(EXPENSES_STORE);
+  toast("Expense deleted 🗑️");
+  rerender();
+}
+
+async function clearExpenses() {
+  const ok = confirm("Clear all expenses? This cannot be undone.");
+  if (!ok) return;
+  await txClear(EXPENSES_STORE);
+  expenses = await txGetAll(EXPENSES_STORE);
+  toast("Expenses cleared 🗑️");
+  rerender();
+}
+
 /** ---------- Inventory table actions ---------- */
 async function handleInventoryTableClick(ev) {
-  const invEditId = ev.target?.getAttribute?.("data-inv-edit");
-  const invDelId = ev.target?.getAttribute?.("data-inv-del");
-  const saleDelForInv = ev.target?.getAttribute?.("data-sale-del");
+  const btn = ev.target.closest("button");
+  if (!btn) return;
+
+  const invEditId = btn.getAttribute("data-inv-edit");
+  const invDelId = btn.getAttribute("data-inv-del");
+  const saleDelForInv = btn.getAttribute("data-sale-del");
 
   if (invEditId) {
     fillInvFormForEdit(invEditId);
@@ -959,161 +1181,7 @@ async function handleInventoryTableClick(ev) {
   }
 }
 
-/** ---------- Expenses actions ---------- */
-async function addExpenseFromForm(ev) {
-  ev.preventDefault();
-  const fd = new FormData(ev.target);
-  const obj = Object.fromEntries(fd.entries());
-
-  const exp = {
-    id: uid(),
-    amount: toNum(obj.amount),
-    category: (obj.category || "").trim(),
-    date: obj.date || "",
-    note: (obj.note || "").trim(),
-    createdAt: Date.now()
-  };
-
-  if (!exp.amount || exp.amount <= 0) return toast("Expense amount required.");
-  if (!exp.date) return toast("Expense date required.");
-  if (!exp.category) return toast("Category required.");
-
-  await txPut(EXPENSES_STORE, exp);
-  expenses = await txGetAll(EXPENSES_STORE);
-
-  ev.target.reset();
-
-  const d = $("#expenseForm")?.querySelector('input[name="date"]');
-  if (d) {
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, "0");
-    const dd = String(today.getDate()).padStart(2, "0");
-    d.value = `${yyyy}-${mm}-${dd}`;
-  }
-
-  toast("Expense added ✅");
-  rerender();
-}
-
-async function handleExpensesTableClick(ev) {
-  const id = ev.target?.getAttribute?.("data-exp-del");
-  if (!id) return;
-  await txDelete(EXPENSES_STORE, id);
-  expenses = await txGetAll(EXPENSES_STORE);
-  toast("Expense deleted 🗑️");
-  rerender();
-}
-
-async function clearExpenses() {
-  const ok = confirm("Clear all expenses? This cannot be undone.");
-  if (!ok) return;
-  await txClear(EXPENSES_STORE);
-  expenses = await txGetAll(EXPENSES_STORE);
-  toast("Expenses cleared 🗑️");
-  rerender();
-}
-
 /** ---------- Export / Import ---------- */
-function parseCSV(text) {
-  // Handles commas + quoted fields
-  const rows = [];
-  let row = [];
-  let cur = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (ch === '"' && inQuotes && next === '"') { // escaped quote
-      cur += '"';
-      i++;
-      continue;
-    }
-    if (ch === '"') {
-      inQuotes = !inQuotes;
-      continue;
-    }
-    if (ch === "," && !inQuotes) {
-      row.push(cur);
-      cur = "";
-      continue;
-    }
-    if ((ch === "\n" || ch === "\r") && !inQuotes) {
-      if (ch === "\r" && next === "\n") i++;
-      row.push(cur);
-      cur = "";
-      if (row.some(c => c.trim() !== "")) rows.push(row);
-      row = [];
-      continue;
-    }
-    cur += ch;
-  }
-  row.push(cur);
-  if (row.some(c => c.trim() !== "")) rows.push(row);
-
-  if (!rows.length) return [];
-  const headers = rows[0].map(h => h.trim());
-  return rows.slice(1).map(cols => {
-    const obj = {};
-    headers.forEach((h, idx) => obj[h] = (cols[idx] ?? "").trim());
-    return obj;
-  });
-}
-
-function csvBool(v) {
-  const s = (v || "").trim().toLowerCase();
-  if (!s) return "yes";
-  if (["y","yes","true","1"].includes(s)) return "yes";
-  if (["n","no","false","0"].includes(s)) return "no";
-  return "yes";
-}
-
-async function importInventoryCSV(file) {
-  const text = await file.text();
-  const rows = parseCSV(text);
-  if (!rows.length) return toast("CSV has no rows.");
-
-  let added = 0;
-  for (const r of rows) {
-    const purchaseDate = r.purchaseDate || r.purchase_date || "";
-    const name = (r.name || "").trim();
-    const setNumber = (r.setNumber || r.set_number || "").trim();
-
-    const purchaseCost = toNum(r.purchaseCost ?? r.purchase_cost);
-    if (!purchaseDate || !name || purchaseCost <= 0) continue;
-
-    const item = {
-      id: uid(),
-      name,
-      setNumber,
-      setImageUrl: (r.setImageUrl || r.set_image_url || "").trim(),
-      purchaseDate,
-      purchaseCost,
-      materialCost: toNum(r.materialCost ?? r.material_cost),
-      condition: normalizeCondition(r.condition),
-      batch: normalizeBatch(r.batch),
-      boughtFrom: (r.boughtFrom || r.bought_from || "").trim(),
-      buyPayment: (r.buyPayment || r.buy_payment || "").trim(),
-      boxIncluded: csvBool(r.boxIncluded ?? r.box_included),
-      manualIncluded: csvBool(r.manualIncluded ?? r.manual_included),
-      status: "in_stock",
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-
-    await txPut(INVENTORY_STORE, item);
-    added++;
-  }
-
-  inventory = await txGetAll(INVENTORY_STORE);
-  toast(`Imported ${added} inventory items ✅`);
-  rerender();
-}
-
-
-
 async function exportData() {
   const payload = {
     exportedAt: new Date().toISOString(),
@@ -1180,7 +1248,7 @@ async function importData(file) {
         fees: toNum(raw.fees),
         soldOn: (raw.soldOn || "").trim(),
         sellPayment: (raw.sellPayment || "").trim(),
-        notes: (raw.notes || "").trim(),
+        buyer: (raw.buyer || "").trim(),
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
@@ -1208,6 +1276,7 @@ async function importData(file) {
   sales = await txGetAll(SALES_STORE);
   expenses = await txGetAll(EXPENSES_STORE);
 
+  // Ensure statuses match sales
   const soldIds = new Set(sales.map(s => s.inventoryId));
   for (const i of inventory) {
     const shouldSold = soldIds.has(i.id);
@@ -1221,6 +1290,49 @@ async function importData(file) {
   inventory = await txGetAll(INVENTORY_STORE);
 
   toast("Imported ✅");
+  rerender();
+}
+
+async function importInventoryCSV(file) {
+  const text = await file.text();
+  const rows = parseCSV(text);
+  if (!rows.length) return toast("CSV has no rows.");
+
+  let added = 0;
+  for (const r of rows) {
+    const purchaseDate = r.purchaseDate || r.purchase_date || "";
+    const name = (r.name || "").trim();
+    const setNumber = (r.setNumber || r.set_number || "").trim();
+    const purchaseCost = parseMoney(r.purchaseCost ?? r.purchase_cost);
+
+    // minimal requirements (you can keep name as "to be added")
+    if (!purchaseDate || purchaseCost <= 0) continue;
+
+    const item = {
+      id: uid(),
+      name: name || "to be added",
+      setNumber,
+      setImageUrl: (r.setImageUrl || r.set_image_url || "").trim(),
+      purchaseDate,
+      purchaseCost,
+      materialCost: parseMoney(r.materialCost ?? r.material_cost),
+      condition: normalizeCondition(r.condition),
+      batch: normalizeBatch(r.batch),
+      boughtFrom: (r.boughtFrom || r.bought_from || "").trim(),
+      buyPayment: (r.buyPayment || r.buy_payment || "").trim(),
+      boxIncluded: csvBool(r.boxIncluded ?? r.box_included),
+      manualIncluded: csvBool(r.manualIncluded ?? r.manual_included),
+      status: "in_stock",
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    await txPut(INVENTORY_STORE, item);
+    added++;
+  }
+
+  inventory = await txGetAll(INVENTORY_STORE);
+  toast(`Imported ${added} inventory items ✅`);
   rerender();
 }
 
@@ -1256,24 +1368,18 @@ async function registerSW() {
 
 /** ---------- Legacy migration (run ONCE) ---------- */
 const MIGRATION_FLAG = "lego_migrated_flips_to_inventory_v1";
-
 async function migrateOldFlipsIfAny() {
-  // If we've already migrated once, never do it again
   if (localStorage.getItem(MIGRATION_FLAG) === "1") return;
 
   const hasOld = await storeExists(OLD_FLIPS_STORE);
   if (!hasOld) {
-    // Nothing to migrate, but mark as done so it never tries again
     localStorage.setItem(MIGRATION_FLAG, "1");
     return;
   }
 
-  // Only migrate if new stores are empty (first time setup)
   const existingInv = await txGetAll(INVENTORY_STORE);
   const existingSales = await txGetAll(SALES_STORE);
-
   if (existingInv.length || existingSales.length) {
-    // New system already in use; don't ever try again
     localStorage.setItem(MIGRATION_FLAG, "1");
     return;
   }
@@ -1328,7 +1434,7 @@ async function migrateOldFlipsIfAny() {
         fees: toNum(f.fees),
         soldOn: (f.soldOn || "").trim(),
         sellPayment: (f.sellPayment || "").trim(),
-        notes: (f.notes || "").trim(),
+        buyer: "", // legacy had notes; we keep buyer empty
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
@@ -1340,10 +1446,7 @@ async function migrateOldFlipsIfAny() {
   toast("Migrated old flips ✅");
 }
 
-
 /** ---------- Init ---------- */
-
-
 async function init() {
   // Tabs
   $("#topTabs")?.addEventListener("click", (e) => {
@@ -1352,15 +1455,6 @@ async function init() {
     setView(btn.dataset.view);
   });
   setView("viewInventory");
-
-  // Defaults
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, "0");
-  const dd = String(today.getDate()).padStart(2, "0");
-  $("#invForm")?.querySelector('input[name="purchaseDate"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
-  $("#saleForm")?.querySelector('input[name="soldDate"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
-  $("#expenseForm")?.querySelector('input[name="date"]')?.setAttribute("value", `${yyyy}-${mm}-${dd}`);
 
   // Header buttons
   $("#apiKeyBtn")?.addEventListener("click", async () => {
@@ -1374,6 +1468,7 @@ async function init() {
   $("#invLookupBtn")?.addEventListener("click", handleInvLookup);
 
   $("#exportBtn")?.addEventListener("click", exportData);
+
   $("#importInput")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1388,8 +1483,7 @@ async function init() {
     e.target.value = "";
   });
 
-
-  // Inventory submit (supports edit mode)
+  // Inventory submit (edit mode supported)
   $("#invForm")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = ev.target;
@@ -1428,11 +1522,7 @@ async function init() {
     rerender();
   });
 
-  $("#invResetBtn")?.addEventListener("click", () => {
-    const f = $("#invForm");
-    if (f?.dataset?.editId) delete f.dataset.editId;
-    clearInvForm(true);
-  });
+  $("#invResetBtn")?.addEventListener("click", () => clearInvForm(true));
 
   // Sale
   $("#saleForm")?.addEventListener("submit", async (ev) => {
@@ -1463,7 +1553,7 @@ async function init() {
       fees,
       soldOn: (obj.soldOn || "").trim(),
       sellPayment: (obj.sellPayment || "").trim(),
-      notes: (obj.notes || "").trim(),
+      buyer: (obj.buyer || "").trim(),
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -1503,14 +1593,14 @@ async function init() {
   $("#expenseTbody")?.addEventListener("click", handleExpensesTableClick);
   $("#clearExpensesBtn")?.addEventListener("click", clearExpenses);
 
-  // Table row actions
+  // Inventory actions
   $("#invTbody")?.addEventListener("click", handleInventoryTableClick);
 
   setupInstallFlow();
   await registerSW();
-
   await migrateOldFlipsIfAny();
 
+  // Load
   inventory = await txGetAll(INVENTORY_STORE);
   sales = await txGetAll(SALES_STORE);
   expenses = await txGetAll(EXPENSES_STORE);
@@ -1528,11 +1618,22 @@ async function init() {
   }
   inventory = await txGetAll(INVENTORY_STORE);
 
+  // Default dates
   setInvFormDefaults();
   setSaleFormDefaults();
+
+  const expDate = $("#expenseForm")?.querySelector('input[name="date"]');
+  if (expDate) {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    expDate.value = `${yyyy}-${mm}-${dd}`;
+  }
+
   rerender();
 
-  // Chart.js may load a moment later
+  // Chart.js sometimes loads slightly later
   let tries = 0;
   const t = setInterval(() => {
     tries++;
@@ -1545,4 +1646,5 @@ async function init() {
 }
 
 init();
+
 
