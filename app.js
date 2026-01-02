@@ -1015,6 +1015,105 @@ async function clearExpenses() {
 }
 
 /** ---------- Export / Import ---------- */
+function parseCSV(text) {
+  // Handles commas + quoted fields
+  const rows = [];
+  let row = [];
+  let cur = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (ch === '"' && inQuotes && next === '"') { // escaped quote
+      cur += '"';
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      row.push(cur);
+      cur = "";
+      continue;
+    }
+    if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && next === "\n") i++;
+      row.push(cur);
+      cur = "";
+      if (row.some(c => c.trim() !== "")) rows.push(row);
+      row = [];
+      continue;
+    }
+    cur += ch;
+  }
+  row.push(cur);
+  if (row.some(c => c.trim() !== "")) rows.push(row);
+
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1).map(cols => {
+    const obj = {};
+    headers.forEach((h, idx) => obj[h] = (cols[idx] ?? "").trim());
+    return obj;
+  });
+}
+
+function csvBool(v) {
+  const s = (v || "").trim().toLowerCase();
+  if (!s) return "yes";
+  if (["y","yes","true","1"].includes(s)) return "yes";
+  if (["n","no","false","0"].includes(s)) return "no";
+  return "yes";
+}
+
+async function importInventoryCSV(file) {
+  const text = await file.text();
+  const rows = parseCSV(text);
+  if (!rows.length) return toast("CSV has no rows.");
+
+  let added = 0;
+  for (const r of rows) {
+    const purchaseDate = r.purchaseDate || r.purchase_date || "";
+    const name = (r.name || "").trim();
+    const setNumber = (r.setNumber || r.set_number || "").trim();
+
+    const purchaseCost = toNum(r.purchaseCost ?? r.purchase_cost);
+    if (!purchaseDate || !name || purchaseCost <= 0) continue;
+
+    const item = {
+      id: uid(),
+      name,
+      setNumber,
+      setImageUrl: (r.setImageUrl || r.set_image_url || "").trim(),
+      purchaseDate,
+      purchaseCost,
+      materialCost: toNum(r.materialCost ?? r.material_cost),
+      condition: normalizeCondition(r.condition),
+      batch: normalizeBatch(r.batch),
+      boughtFrom: (r.boughtFrom || r.bought_from || "").trim(),
+      buyPayment: (r.buyPayment || r.buy_payment || "").trim(),
+      boxIncluded: csvBool(r.boxIncluded ?? r.box_included),
+      manualIncluded: csvBool(r.manualIncluded ?? r.manual_included),
+      status: "in_stock",
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    await txPut(INVENTORY_STORE, item);
+    added++;
+  }
+
+  inventory = await txGetAll(INVENTORY_STORE);
+  toast(`Imported ${added} inventory items ✅`);
+  rerender();
+}
+
+
+
 async function exportData() {
   const payload = {
     exportedAt: new Date().toISOString(),
@@ -1243,6 +1342,8 @@ async function migrateOldFlipsIfAny() {
 
 
 /** ---------- Init ---------- */
+
+
 async function init() {
   // Tabs
   $("#topTabs")?.addEventListener("click", (e) => {
@@ -1279,6 +1380,14 @@ async function init() {
     await importData(file);
     e.target.value = "";
   });
+
+  $("#importCsvInput")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await importInventoryCSV(file);
+    e.target.value = "";
+  });
+
 
   // Inventory submit (supports edit mode)
   $("#invForm")?.addEventListener("submit", async (ev) => {
