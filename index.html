@@ -1,4 +1,4 @@
-<!-- index.html (FULL) -->
+<!-- index.html (FULL UPDATED) -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -159,9 +159,10 @@
             </div>
 
             <input type="hidden" name="setImageUrl" />
+            <input type="hidden" name="id" /> <!-- used for edit -->
 
             <div class="row buttons">
-              <button class="btn primary" type="submit">Save Inventory</button>
+              <button class="btn primary" type="submit" id="invSaveBtn">Save Inventory</button>
               <button class="btn" type="button" id="invResetBtn">Clear</button>
             </div>
           </form>
@@ -213,7 +214,7 @@
           </div>
 
           <div class="footerNote">
-            Data is stored on your device (IndexedDB). Export regularly if you want backups.
+            Tip: Sold items can be edited from the <b>Sell</b> tab by selecting the same item again (app.js update).
           </div>
         </section>
       </section>
@@ -230,6 +231,7 @@
                 <input name="invPick" id="invPick" list="inventoryList" placeholder="Type set # or name..." />
                 <datalist id="inventoryList"></datalist>
                 <input type="hidden" name="inventoryId" />
+                <input type="hidden" name="saleId" /> <!-- if editing an existing sale -->
               </label>
 
               <label>
@@ -252,8 +254,8 @@
 
             <div class="row">
               <label>
-                Sold On
-                <input name="soldOn" />
+                Sold Location (Marketplace)
+                <input name="soldOn" placeholder="" />
               </label>
 
               <label>
@@ -285,14 +287,21 @@
               </label>
             </div>
 
+            <div class="row">
+              <label style="grid-column: 1 / -1;">
+                Notes
+                <textarea name="notes" rows="3"></textarea>
+              </label>
+            </div>
+
             <div class="row buttons">
-              <button class="btn primary" type="submit">Save Sale</button>
+              <button class="btn primary" type="submit" id="saleSaveBtn">Save Sale</button>
               <button class="btn" type="button" id="saleResetBtn">Clear</button>
             </div>
           </form>
 
           <div class="footerNote">
-            Select an inventory item first. Purchase info stays linked automatically.
+            If you select an item that’s already sold, the form will load the existing sale so you can <b>Edit</b> it.
           </div>
         </section>
       </section>
@@ -366,44 +375,95 @@
         <section class="card">
           <h2>Stats</h2>
 
+          <!-- Filters for deeper analysis -->
+          <div class="listHeader" style="margin-bottom:10px;">
+            <div class="filters">
+              <select id="statsRange">
+                <option value="all">All Time</option>
+                <option value="ytd">Year to Date</option>
+                <option value="90d">Last 90 Days</option>
+                <option value="30d">Last 30 Days</option>
+              </select>
+
+              <select id="statsBatchFilter" title="Stats batch filter">
+                <option value="all">All Batches</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- KPI grid (expanded / more specific) -->
           <div class="kpis">
             <div class="kpi"><div class="kpiLabel">Revenue</div><div class="kpiValue" id="kpiRevenue">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Purchase Cost</div><div class="kpiValue" id="kpiPurchase">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Material Cost</div><div class="kpiValue" id="kpiMaterial">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Shipping Cost</div><div class="kpiValue" id="kpiShipping">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Other Cost</div><div class="kpiValue" id="kpiOther">$0.00</div></div>
-            <div class="kpi"><div class="kpiLabel">Profit</div><div class="kpiValue" id="kpiProfit">$0.00</div></div>
+            <div class="kpi"><div class="kpiLabel">COGS (Purchase)</div><div class="kpiValue" id="kpiPurchase">$0.00</div></div>
+            <div class="kpi"><div class="kpiLabel">Material</div><div class="kpiValue" id="kpiMaterial">$0.00</div></div>
+            <div class="kpi"><div class="kpiLabel">Shipping Out</div><div class="kpiValue" id="kpiShipping">$0.00</div></div>
+
+            <div class="kpi"><div class="kpiLabel">Other Overhead</div><div class="kpiValue" id="kpiOther">$0.00</div></div>
+            <div class="kpi"><div class="kpiLabel">Net Profit</div><div class="kpiValue" id="kpiProfit">$0.00</div></div>
+            <div class="kpi"><div class="kpiLabel">Net Margin</div><div class="kpiValue" id="kpiMargin">0%</div></div>
+            <div class="kpi"><div class="kpiLabel">Avg Profit / Sale</div><div class="kpiValue" id="kpiAvgProfit">$0.00</div></div>
 
             <div class="kpi"><div class="kpiLabel">Invested (Unsold)</div><div class="kpiValue" id="kpiInvestedUnsold">$0.00</div></div>
             <div class="kpi"><div class="kpiLabel">Unsold Items</div><div class="kpiValue" id="kpiUnsoldCount">0</div></div>
+            <div class="kpi"><div class="kpiLabel">Sell-through</div><div class="kpiValue" id="kpiSellThrough">0%</div></div>
+            <div class="kpi"><div class="kpiLabel">Avg Days to Sell</div><div class="kpiValue" id="kpiAvgDays">0</div></div>
           </div>
 
+          <!-- Charts (expanded for deeper analysis) -->
           <div class="charts">
             <div class="chartCard">
-              <div class="chartTitle">Profit Over Time (by sold month)</div>
+              <div class="chartTitle">Net Profit Over Time (by sold month)</div>
               <canvas id="profitLine"></canvas>
             </div>
+
             <div class="chartCard">
-              <div class="chartTitle">Profit by Marketplace</div>
+              <div class="chartTitle">Revenue vs Profit (by month)</div>
+              <canvas id="revProfitCombo"></canvas>
+            </div>
+
+            <div class="chartCard">
+              <div class="chartTitle">Profit by Marketplace (Top 10)</div>
               <canvas id="marketBar"></canvas>
             </div>
+
+            <div class="chartCard">
+              <div class="chartTitle">Revenue by Marketplace (Top 10)</div>
+              <canvas id="marketRevenueBar"></canvas>
+            </div>
+
             <div class="chartCard">
               <div class="chartTitle">Profit by Condition</div>
               <canvas id="conditionBar"></canvas>
             </div>
+
+            <div class="chartCard">
+              <div class="chartTitle">Sell-through by Condition</div>
+              <canvas id="sellThroughCond"></canvas>
+            </div>
+
             <div class="chartCard">
               <div class="chartTitle">Profit by Batch (Top 10)</div>
               <canvas id="batchBar"></canvas>
             </div>
 
             <div class="chartCard">
-              <div class="chartTitle">Spent by Batch (Top 10)</div>
-              <canvas id="spentBatchBar"></canvas>
+              <div class="chartTitle">Spent vs Revenue by Batch (Top 10)</div>
+              <canvas id="batchSpendRev"></canvas>
             </div>
+
             <div class="chartCard">
-              <div class="chartTitle">Revenue by Batch (Top 10)</div>
-              <canvas id="revenueBatchBar"></canvas>
+              <div class="chartTitle">Buyer Breakdown (Top 10)</div>
+              <canvas id="buyerBar"></canvas>
             </div>
+
+            <div class="chartCard">
+              <div class="chartTitle">Fees + Shipping Out Over Time</div>
+              <canvas id="feesLine"></canvas>
+            </div>
+          </div>
+
+          <div class="footerNote">
+            Stats are computed from: Inventory + Sales + Expenses. Batch filters apply across all charts/KPIs.
           </div>
         </section>
       </section>
@@ -414,5 +474,3 @@
   <div class="toast" id="toast" aria-live="polite"></div>
 </body>
 </html>
-
-
