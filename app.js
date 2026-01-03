@@ -851,27 +851,34 @@ function getStatsBatchScopedInventory() {
 
     
 function renderStats() {
-  // Only consider SOLD inventory for profit/revenue stats; EXCHANGED excluded by status
-  const soldInvIds = new Set(allInv.filter((i) => (i.status || "in_stock") === "sold").map((i) => i.id));
+  // Only SOLD items count in sales stats
+  const soldInvIds = new Set(
+    allInv.filter((i) => (i.status || "in_stock") === "sold").map((i) => i.id)
+  );
+
   let sales = allSales.filter((s) => soldInvIds.has(s.inventoryId));
 
+  // Filters (range + batch)
   sales = statsRangeFilter(sales);
   sales = statsBatchFilterSales(sales);
 
+  // Allocate expenses across sales in scope
   const alloc = sumExpensesByType(allExpenses, sales);
 
+  // Totals
   let itemRevenue = 0;
-  let shippingRevenue = 0;
-  
-  let purchaseCost = 0;
-  let materialCost = 0;
-  
-  let shippingPaidTotal = 0;
-  let platformFeesTotal = 0;
-  
-  let overheadAllocated = 0;
-  let netProfit = 0;
+  let shippingCharged = 0;
 
+  let purchaseCost = 0;
+  let materialTotal = 0;
+
+  let shippingPaidDirect = 0;
+  let platformFeesDirect = 0;
+
+  let shippingOverheadAllocated = 0; // "Shipping" category expenses (allocated)
+  let otherOverheadAllocated = 0;    // everything else (allocated)
+
+  let netProfit = 0;
 
   let totalDays = 0;
   let daysCount = 0;
@@ -880,27 +887,21 @@ function renderStats() {
     const inv = allInv.find((x) => x.id === s.inventoryId);
     if (!inv) continue;
 
-    const purchase = toNum(inv.purchaseCost);
-    const material = toNum(inv.materialCost);
-    const shipPaid = toNum(s.shippingPaid);
-    const platformFees = toNum(s.platformFees);
-
     const net = computeSaleNet(inv, s, alloc);
 
     itemRevenue += saleItemRevenue(s);
-    shippingRevenue += saleShippingRevenue(s);
-    
-    purchaseCost += purchase;
-    materialCost += material + net.allocMaterial;
-    
-    shippingPaidTotal += shipPaid;
-    platformFeesTotal += platformFees;
-    
-    shippingPaidTotal += net.allocShipping;     // allocated Shipping-category expenses
-    overheadAllocated += net.allocOther;        // allocated non-shipping/supplies overhead
-    
-    netProfit += net.netProfit;
+    shippingCharged += saleShippingRevenue(s);
 
+    purchaseCost += toNum(inv.purchaseCost);
+    materialTotal += toNum(inv.materialCost) + net.allocMaterial;
+
+    shippingPaidDirect += toNum(s.shippingPaid);
+    platformFeesDirect += toNum(s.platformFees);
+
+    shippingOverheadAllocated += net.allocShipping;
+    otherOverheadAllocated += net.allocOther;
+
+    netProfit += net.netProfit;
 
     const d = daysBetween(inv.purchaseDate, s.soldDate);
     if (d !== null) {
@@ -909,47 +910,48 @@ function renderStats() {
     }
   }
 
-  const margin = itemRevenue > 0 ? (netProfit / itemRevenue) * 100 : 0;
+  const grossTake = itemRevenue + shippingCharged; // what buyer paid you total
+  const margin = grossTake > 0 ? (netProfit / grossTake) * 100 : 0;
   const avgProfit = sales.length ? netProfit / sales.length : 0;
 
-  // Unsold invested
-  // Inventory KPIs should respect selected batch (but NOT the date range)
+  // Inventory KPIs should respect selected batch (NOT date range)
   const invScope = getStatsBatchScopedInventory();
-
   const unsoldInv = invScope.filter((i) => (i.status || "in_stock") === "in_stock");
   const soldInv = invScope.filter((i) => (i.status || "in_stock") === "sold");
 
   const investedUnsold = unsoldInv.reduce((sum, inv) => sum + invTotalCost(inv), 0);
   const sellThrough = (soldInv.length / Math.max(1, invScope.length)) * 100;
-
   const avgDays = daysCount ? Math.round(totalDays / daysCount) : 0;
 
-  // KPIs (sales-based)
-  $("#kpiRevenue").textContent = money(itemRevenue);          // item revenue only (no shipping)
-  $("#kpiPurchase").textContent = money(purchaseCost);
-  $("#kpiMaterial").textContent = money(materialCost);
+  // Write KPIs safely (don’t crash if an element is missing)
+  const setText = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
 
-  // Shipping KPI should be: shipping you paid + allocated shipping-expenses
-  const shippingTotal = shippingPaidTotal;
-  $("#kpiShipping").textContent = money(shippingTotal);
+  setText("kpiRevenue", money(itemRevenue));
+  setText("kpiShipCharged", money(shippingCharged));
+  setText("kpiShipPaid", money(shippingPaidDirect));
+  setText("kpiFees", money(platformFeesDirect));
 
-  // "Other" KPI should be: platform fees + allocated other overhead
-  const otherOverhead = platformFeesTotal + overheadAllocated;
-  $("#kpiOther").textContent = money(otherOverhead);
+  setText("kpiPurchase", money(purchaseCost));
+  setText("kpiMaterial", money(materialTotal));
 
-  $("#kpiProfit").textContent = money(netProfit);
-  $("#kpiMargin").textContent = pct(margin);
-  $("#kpiAvgProfit").textContent = money(avgProfit);
+  // Other overhead = allocated overhead + allocated shipping overhead
+  setText("kpiOther", money(otherOverheadAllocated + shippingOverheadAllocated));
 
-  // KPIs (inventory-based, batch-scoped)
-  $("#kpiInvestedUnsold").textContent = money(investedUnsold);
-  $("#kpiUnsoldCount").textContent = String(unsoldInv.length);
-  $("#kpiSellThrough").textContent = pct(sellThrough);
-  $("#kpiAvgDays").textContent = String(avgDays);
+  setText("kpiProfit", money(netProfit));
+  setText("kpiMargin", pct(margin));
+  setText("kpiAvgProfit", money(avgProfit));
+
+  setText("kpiInvestedUnsold", money(investedUnsold));
+  setText("kpiUnsoldCount", String(unsoldInv.length));
+  setText("kpiSellThrough", pct(sellThrough));
+  setText("kpiAvgDays", String(avgDays));
 
   renderCharts(sales, alloc);
-
 }
+
 
 function destroyChart(key) {
   if (charts[key]) {
