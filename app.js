@@ -610,10 +610,12 @@ function renderExpenseSummary(list) {
 function computeInvSaleSnapshot(inv) {
   const sale = allSales.find((s) => s.inventoryId === inv.id) || null;
   const sold = (inv.status || "in_stock") === "sold" && sale;
-  const revenue = sold ? saleItemRevenue(sale) : 0;
+  const revenue = sold ? saleItemRevenue(sale) : 0; // keep Revenue column = item only
+  
+  // Profit should include shipping charged (since shipping paid + fees are already costs)
+  const grossTake = sold ? (saleItemRevenue(sale) + saleShippingRevenue(sale)) : 0;
+  const directProfit = sold ? grossTake - saleDirectCosts(inv, sale) : 0;
 
-  // direct profit (no overhead allocation)
-  const directProfit = sold ? revenue - saleDirectCosts(inv, sale) : 0;
 
   return { sale, sold, revenue, directProfit };
 }
