@@ -907,14 +907,22 @@ function renderStats() {
   const sellThrough = (allInv.filter((i) => (i.status || "in_stock") === "sold").length / Math.max(1, allInv.filter((i) => (i.status || "in_stock") !== "exchanged").length)) * 100;
   const avgDays = daysCount ? Math.round(totalDays / daysCount) : 0;
 
-  $("#kpiRevenue").textContent = money(revenue);
+  // KPIs
+  $("#kpiRevenue").textContent = money(itemRevenue);
   $("#kpiPurchase").textContent = money(purchaseCost);
   $("#kpiMaterial").textContent = money(materialCost);
-  $("#kpiShipping").textContent = money(shippingTotal);
-  $("#kpiOther").textContent = money(otherOverhead);
+  
+  // NEW IDs (from the HTML update)
+  $("#kpiShipCharged").textContent = money(shippingRevenue);
+  $("#kpiShipPaid").textContent = money(shippingPaidTotal);
+  $("#kpiFees").textContent = money(platformFeesTotal);
+  
+  $("#kpiOther").textContent = money(overheadAllocated);
+  
   $("#kpiProfit").textContent = money(netProfit);
   $("#kpiMargin").textContent = pct(margin);
   $("#kpiAvgProfit").textContent = money(avgProfit);
+  
   $("#kpiInvestedUnsold").textContent = money(investedUnsold);
   $("#kpiUnsoldCount").textContent = String(unsold.length);
   $("#kpiSellThrough").textContent = pct(sellThrough);
