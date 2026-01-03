@@ -286,8 +286,6 @@ let charts = {
   conditionBar: null,
   sellThroughCond: null,
   batchBar: null,
-  batchSpendRev: null,
-  feesLine: null,
 };
 
 /** =======================
@@ -840,6 +838,18 @@ function computeSaleNet(inv, sale, alloc) {
   };
 }
 
+function getStatsBatchScopedInventory() {
+  const b = $("#statsBatchFilter")?.value || "all";
+
+  // exclude exchanged everywhere (you already do that elsewhere)
+  const base = allInv.filter((inv) => (inv.status || "in_stock") !== "exchanged");
+
+  if (b === "all") return base;
+
+  return base.filter((inv) => normalizeBatch(inv.batch) === b);
+}
+
+    
 function renderStats() {
   // Only consider SOLD inventory for profit/revenue stats; EXCHANGED excluded by status
   const soldInvIds = new Set(allInv.filter((i) => (i.status || "in_stock") === "sold").map((i) => i.id));
@@ -903,34 +913,42 @@ function renderStats() {
   const avgProfit = sales.length ? netProfit / sales.length : 0;
 
   // Unsold invested
-  const unsold = allInv.filter((i) => (i.status || "in_stock") === "in_stock");
-  const investedUnsold = unsold.reduce((sum, inv) => sum + invTotalCost(inv), 0);
+  // Inventory KPIs should respect selected batch (but NOT the date range)
+  const invScope = getStatsBatchScopedInventory();
 
-  const sellThrough = (allInv.filter((i) => (i.status || "in_stock") === "sold").length / Math.max(1, allInv.filter((i) => (i.status || "in_stock") !== "exchanged").length)) * 100;
+  const unsoldInv = invScope.filter((i) => (i.status || "in_stock") === "in_stock");
+  const soldInv = invScope.filter((i) => (i.status || "in_stock") === "sold");
+
+  const investedUnsold = unsoldInv.reduce((sum, inv) => sum + invTotalCost(inv), 0);
+  const sellThrough = (soldInv.length / Math.max(1, invScope.length)) * 100;
+
   const avgDays = daysCount ? Math.round(totalDays / daysCount) : 0;
 
-  // KPIs
-  $("#kpiRevenue").textContent = money(itemRevenue);
+  // KPIs (sales-based)
+  $("#kpiRevenue").textContent = money(itemRevenue);          // item revenue only (no shipping)
   $("#kpiPurchase").textContent = money(purchaseCost);
   $("#kpiMaterial").textContent = money(materialCost);
-  
-  // NEW IDs (from the HTML update)
-  $("#kpiShipCharged").textContent = money(shippingRevenue);
-  $("#kpiShipPaid").textContent = money(shippingPaidTotal);
-  $("#kpiFees").textContent = money(platformFeesTotal);
-  
-  $("#kpiOther").textContent = money(overheadAllocated);
-  
+
+  // Shipping KPI should be: shipping you paid + allocated shipping-expenses
+  const shippingTotal = shippingPaidTotal;
+  $("#kpiShipping").textContent = money(shippingTotal);
+
+  // "Other" KPI should be: platform fees + allocated other overhead
+  const otherOverhead = platformFeesTotal + overheadAllocated;
+  $("#kpiOther").textContent = money(otherOverhead);
+
   $("#kpiProfit").textContent = money(netProfit);
   $("#kpiMargin").textContent = pct(margin);
   $("#kpiAvgProfit").textContent = money(avgProfit);
-  
+
+  // KPIs (inventory-based, batch-scoped)
   $("#kpiInvestedUnsold").textContent = money(investedUnsold);
-  $("#kpiUnsoldCount").textContent = String(unsold.length);
+  $("#kpiUnsoldCount").textContent = String(unsoldInv.length);
   $("#kpiSellThrough").textContent = pct(sellThrough);
   $("#kpiAvgDays").textContent = String(avgDays);
 
   renderCharts(sales, alloc);
+
 }
 
 function destroyChart(key) {
@@ -1269,74 +1287,6 @@ function renderCharts(sales, alloc) {
             backgroundColor: (ctx) => ((ctx.raw ?? 0) >= 0 ? "rgba(168,85,247,0.45)" : "rgba(239,68,68,0.55)"),
             borderColor: "rgba(255,255,255,0.18)",
             borderWidth: 1,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { labels: { color: common.color } } },
-        scales: {
-          x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
-        },
-      },
-    });
-  }
-
-  // Spent vs Revenue by batch
-  const bsrEl = $("#batchSpendRev");
-  if (bsrEl) {
-    destroyChart("batchSpendRev");
-    charts.batchSpendRev = new Chart(bsrEl.getContext("2d"), {
-      data: {
-        labels: batchLabels.length ? batchLabels : ["—"],
-        datasets: [
-          {
-            type: "bar",
-            label: "Spent (Cost)",
-            data: batchLabels.length ? batchSpentVals : [0],
-            backgroundColor: "rgba(245,158,11,0.30)",
-            borderColor: "rgba(255,255,255,0.18)",
-            borderWidth: 1,
-          },
-          {
-            type: "bar",
-            label: "Revenue",
-            data: batchLabels.length ? batchRevVals : [0],
-            backgroundColor: "rgba(59,130,246,0.35)",
-            borderColor: "rgba(255,255,255,0.18)",
-            borderWidth: 1,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { labels: { color: common.color } } },
-        scales: {
-          x: { ticks: { color: common.color }, grid: { color: common.grid } },
-          y: { ticks: { color: common.color, callback: (v) => money(v) }, grid: { color: common.grid } },
-        },
-      },
-    });
-  }
-
-  // Fees + Shipping over time
-  const feesEl = $("#feesLine");
-  if (feesEl) {
-    destroyChart("feesLine");
-    charts.feesLine = new Chart(feesEl.getContext("2d"), {
-      type: "line",
-      data: {
-        labels: months.length ? months : ["—"],
-        datasets: [
-          {
-            label: "Fees + Shipping (you paid)",
-            data: months.length ? feesShipVals : [0],
-            borderColor: "rgba(245,158,11,0.75)",
-            backgroundColor: "rgba(245,158,11,0.20)",
-            fill: true,
-            tension: 0.25,
-            pointRadius: 3,
           },
         ],
       },
