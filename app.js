@@ -308,13 +308,20 @@ function showView(id) {
 function invTotalCost(inv) {
   return toNum(inv.purchaseCost) + toNum(inv.materialCost);
 }
-function saleRevenue(s) {
-  return toNum(s.itemPrice) + toNum(s.shippingCharged);
+
+// Revenue should be item-only (shipping charged is not "revenue" KPI)
+function saleItemRevenue(s) {
+  return toNum(s.itemPrice);
 }
+function saleShippingRevenue(s) {
+  return toNum(s.shippingCharged);
+}
+
+// direct: purchase + per-set material + shipping paid + platform fees
 function saleDirectCosts(inv, s) {
-  // direct: purchase + per-set material + shipping paid + platform fees
   return invTotalCost(inv) + toNum(s.shippingPaid) + toNum(s.platformFees);
 }
+
 
 /** =======================
  *  Filters (Inventory list)
@@ -603,7 +610,7 @@ function renderExpenseSummary(list) {
 function computeInvSaleSnapshot(inv) {
   const sale = allSales.find((s) => s.inventoryId === inv.id) || null;
   const sold = (inv.status || "in_stock") === "sold" && sale;
-  const revenue = sold ? saleRevenue(sale) : 0;
+  const revenue = sold ? saleItemRevenue(sale) : 0;
 
   // direct profit (no overhead allocation)
   const directProfit = sold ? revenue - saleDirectCosts(inv, sale) : 0;
@@ -802,7 +809,7 @@ function sumExpensesByType(expenses, salesInScope) {
   for (const s of salesInScope) {
     const inv = allInv.find((x) => x.id === s.inventoryId);
     if (!inv || (inv.status || "in_stock") !== "sold") continue;
-    const rev = saleRevenue(s);
+    const rev = saleItemRevenue(s);
     totalRev += rev;
     revBySaleId.set(s.id, rev);
   }
@@ -811,7 +818,7 @@ function sumExpensesByType(expenses, salesInScope) {
 }
 
 function computeSaleNet(inv, sale, alloc) {
-  const revenue = saleRevenue(sale);
+  const revenue = saleItemRevenue(sale) + saleShippingRevenue(sale);
   const direct = saleDirectCosts(inv, sale);
 
   const w = (alloc.revBySaleId.get(sale.id) || 0) / alloc.totalRev;
@@ -841,12 +848,18 @@ function renderStats() {
 
   const alloc = sumExpensesByType(allExpenses, sales);
 
-  let revenue = 0;
+  let itemRevenue = 0;
+  let shippingRevenue = 0;
+  
   let purchaseCost = 0;
   let materialCost = 0;
-  let shippingTotal = 0;
-  let otherOverhead = 0;
+  
+  let shippingPaidTotal = 0;
+  let platformFeesTotal = 0;
+  
+  let overheadAllocated = 0;
   let netProfit = 0;
+
 
   let totalDays = 0;
   let daysCount = 0;
@@ -862,12 +875,20 @@ function renderStats() {
 
     const net = computeSaleNet(inv, s, alloc);
 
-    revenue += net.revenue;
+    itemRevenue += saleItemRevenue(s);
+    shippingRevenue += saleShippingRevenue(s);
+    
     purchaseCost += purchase;
-    materialCost += material + net.allocMaterial; // show overhead supplies/parts inside material bucket
-    shippingTotal += shipPaid + platformFees + net.allocShipping; // shipping-ish bucket includes fees + shipping + shipping-expenses
-    otherOverhead += net.allocOther;
+    materialCost += material + net.allocMaterial;
+    
+    shippingPaidTotal += shipPaid;
+    platformFeesTotal += platformFees;
+    
+    shippingPaidTotal += net.allocShipping;     // allocated Shipping-category expenses
+    overheadAllocated += net.allocOther;        // allocated non-shipping/supplies overhead
+    
     netProfit += net.netProfit;
+
 
     const d = daysBetween(inv.purchaseDate, s.soldDate);
     if (d !== null) {
@@ -876,7 +897,7 @@ function renderStats() {
     }
   }
 
-  const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+  const margin = itemRevenue > 0 ? (netProfit / itemRevenue) * 100 : 0;
   const avgProfit = sales.length ? netProfit / sales.length : 0;
 
   // Unsold invested
